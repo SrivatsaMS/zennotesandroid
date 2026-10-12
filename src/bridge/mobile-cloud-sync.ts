@@ -41,6 +41,13 @@ import {
 import { CachedCloudSyncRepository, type ScanCache } from './cloud-sync-repository'
 import { trackCloudSyncChanges } from './cloud-sync-refresh'
 import { isNotFoundError } from './fs-errors'
+import { randomUUID } from './uuid'
+import {
+  ENCRYPTED_VAULT_BACKUP_DOWNLOAD_MESSAGE,
+  assertMobileCloudVaultCanLink,
+  createMobileEncryptedCloudVault,
+  isMobileCloudVaultEncrypted
+} from './mobile-cloud-encryption'
 
 const STORAGE_ROOT = 'zennotes-cloud-sync'
 const refreshStates = new WeakMap<MobileVault, { changed: boolean }>()
@@ -73,7 +80,7 @@ const persistence: CloudSyncHostPersistence = {
     }
     // Preserve the complete state, including unsent conflict drafts, before unlinking.
     await Filesystem.writeFile({
-      path: path.replace('/states/', '/retired-states/').replace(/\.json$/, `.${crypto.randomUUID()}.json`),
+      path: path.replace('/states/', '/retired-states/').replace(/\.json$/, `.${randomUUID()}.json`),
       directory: Directory.Data, encoding: Encoding.UTF8, data, recursive: true
     })
     await deleteDataFile(path)
@@ -94,6 +101,7 @@ export async function linkMobileCloudVault(
   vault: MobileVault,
   vaultId: string
 ): Promise<CloudVaultLink> {
+  await assertMobileCloudVaultCanLink(vaultId)
   const link = await service.link(hostVault(vault), vaultId)
   // Joining an established cloud vault: align this vault's physical layout
   // with the cloud tree before the first sync merges them (#17). Best-effort —
@@ -108,9 +116,14 @@ export async function linkMobileCloudVault(
 
 export async function createAndLinkMobileCloudVault(
   vault: MobileVault,
-  name: string
+  name: string,
+  options: { encrypted?: boolean } = {}
 ): Promise<CloudVaultLink> {
-  return service.createAndLink(hostVault(vault), name)
+  if (!options.encrypted) return service.createAndLink(hostVault(vault), name)
+  // The service stores a placeholder name for an encrypted vault. Linking
+  // through the vault list, which opens names on an unlocked device, keeps
+  // the real one in the link, and the link never leaves this device.
+  return service.link(hostVault(vault), await createMobileEncryptedCloudVault(name))
 }
 
 export async function unlinkMobileCloudVault(vault: MobileVault): Promise<void> {
@@ -260,7 +273,11 @@ export async function createMobileCloudBackup(
   vault: MobileVault,
   label?: string
 ): Promise<CloudBackupSnapshot> {
-  return service.createBackup(hostVault(vault), label)
+  // A typed label would reach ZenNotes Cloud readable, so encrypted vaults
+  // keep their backups unlabeled.
+  const link = label === undefined ? null : await service.linkedVault(hostVault(vault))
+  const encrypted = link ? await isMobileCloudVaultEncrypted(link.vault_id) : false
+  return service.createBackup(hostVault(vault), encrypted ? undefined : label)
 }
 
 export async function deleteMobileCloudBackup(
@@ -280,10 +297,13 @@ export async function downloadMobileCloudBackup(
   if (link.base_url !== credential.base_url) {
     throw new Error('This vault is linked to a different ZenNotes Cloud account.')
   }
+  // An encrypted vault's archive holds ciphertext under path ids. The desktop
+  // app decrypts it item by item; this app does not, so it never saves one.
+  if (await isMobileCloudVaultEncrypted(link.vault_id)) throw new Error(ENCRYPTED_VAULT_BACKUP_DOWNLOAD_MESSAGE)
 
   const safeBackupId = backupId.replace(/[^a-zA-Z0-9-]/g, '')
   if (!safeBackupId) throw new Error('That backup identifier is invalid.')
-  const path = `zennotes-cloud-backups/${crypto.randomUUID()}/zennotes-backup-${safeBackupId}.json.gz`
+  const path = `zennotes-cloud-backups/${randomUUID()}/zennotes-backup-${safeBackupId}.json.gz`
   const url = `${credential.base_url}/api/v1/vaults/${encodeURIComponent(link.vault_id)}/backups/${encodeURIComponent(backupId)}/download`
   await Filesystem.downloadFile({
     url,

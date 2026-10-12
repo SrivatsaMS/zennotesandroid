@@ -84,6 +84,7 @@ import {
   resolveExternalVault
 } from './folder-picker'
 import { emitVaultChange, onVaultChange, onOpenNoteRequested, requestOpenNote } from './events'
+import { randomUUID } from './uuid'
 import { renderTikzOnDevice } from './tikz'
 import { fetchLinkMetadataOnDevice } from './link-metadata'
 import {
@@ -99,6 +100,16 @@ import {
   updateMobileCloudPublishedNote
 } from './mobile-cloud-auth'
 import { uploadObject } from './cloud-sync-client'
+import {
+  changeMobileCloudEncryptionPassphrase,
+  finishMobileCloudEncryptionSetup,
+  finishNewMobileCloudRecoveryKey,
+  getMobileCloudEncryptionStatus,
+  lockMobileCloudEncryption,
+  prepareMobileCloudEncryptionSetup,
+  prepareNewMobileCloudRecoveryKey,
+  unlockMobileCloudEncryption
+} from './mobile-cloud-encryption'
 import { mobilePublishAssetPlatform } from './mobile-publish-assets'
 import {
   createAndLinkMobileCloudVault,
@@ -143,7 +154,7 @@ import {
 import { folderForRelativePath, posixNormalize, sanitizeNoteTitle } from './vault-core'
 import { isPhoneViewport } from '../viewport'
 
-let appVersion = '1.1.36'
+let appVersion = '1.1.37'
 
 export async function loadNativeAppVersion(): Promise<string> {
   try {
@@ -807,7 +818,7 @@ const droppedFiles = new Map<string, File>()
 
 function getPathForFile(file: File): string | null {
   if (!file) return null
-  const token = `mobile-drop://${crypto.randomUUID()}/${encodeURIComponent(file.name)}`
+  const token = `mobile-drop://${randomUUID()}/${encodeURIComponent(file.name)}`
   droppedFiles.set(token, file)
   return token
 }
@@ -932,8 +943,20 @@ export const mobileBridge: ZenBridge = {
   listCloudVaults: listMobileCloudVaults,
   getCloudVaultLink: () => getMobileCloudVaultLink(activeMobileVault()),
   linkCloudVault: (vaultId) => linkMobileCloudVault(activeMobileVault(), vaultId),
-  createAndLinkCloudVault: (name) =>
-    createAndLinkMobileCloudVault(activeMobileVault(), name),
+  createAndLinkCloudVault: (name, options) =>
+    createAndLinkMobileCloudVault(activeMobileVault(), name, options),
+  // End-to-end encryption for the account. Settings shows it only while the
+  // service offers it and this build opted in (MOBILE_CLOUD_END_TO_END_ENCRYPTION).
+  // Moving an existing vault into an encrypted one (encryptCloudVault) stays
+  // desktop-only.
+  getCloudEncryptionStatus: getMobileCloudEncryptionStatus,
+  prepareCloudEncryptionSetup: prepareMobileCloudEncryptionSetup,
+  finishCloudEncryptionSetup: finishMobileCloudEncryptionSetup,
+  unlockCloudEncryption: unlockMobileCloudEncryption,
+  changeCloudEncryptionPassphrase: changeMobileCloudEncryptionPassphrase,
+  prepareNewCloudRecoveryKey: prepareNewMobileCloudRecoveryKey,
+  finishNewCloudRecoveryKey: finishNewMobileCloudRecoveryKey,
+  lockCloudEncryption: lockMobileCloudEncryption,
   unlinkCloudVault: () => unlinkMobileCloudVault(activeMobileVault()),
   deleteCloudVault: () => deleteMobileCloudVault(activeMobileVault()),
   syncCloudVault: () => syncMobileCloudVault(activeMobileVault()),

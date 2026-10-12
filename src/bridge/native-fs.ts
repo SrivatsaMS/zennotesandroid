@@ -19,8 +19,11 @@
  */
 import { Capacitor, registerPlugin } from '@capacitor/core'
 import { Directory, Encoding, Filesystem, type FileInfo } from '@capacitor/filesystem'
+import { toBase64, type Zne1ChunkCipherParams } from '@zennotes/shared-domain/cloud-e2ee'
 import { ensureDownloaded } from './icloud'
 import { isNotFoundError } from './fs-errors'
+import type { MobileSealedUploadFile } from './mobile-direct-upload'
+import { randomUUID } from './uuid'
 
 export const VAULTS_DIR = 'ZenNotes'
 
@@ -103,11 +106,59 @@ export interface CloudFileFingerprint {
   inlineBase64?: string
 }
 
+/**
+ * One ZNE1 object for the native chunk loop (cloud-e2ee.md). JavaScript
+ * derives the object key, builds the header, checks the key commitment and
+ * computes the AAD; native code only seals or opens the 64 KiB chunks and
+ * hashes them, so no parent key ever crosses the bridge. `source` and
+ * `destination` are vault file URIs, as for `copy`, and must differ.
+ */
+export interface Zne1FileRequest {
+  source: string
+  destination: string
+  /** Base64 of the object's 74-byte header. */
+  header: string
+  /** Base64 of the 32-byte per-object AES-256-GCM key. */
+  objectKey: string
+  /** Base64 of SHA-256 over the header followed by the context. */
+  aad: string
+}
+
+/** The ciphertext the upload declares, and the plaintext the item metadata records. */
+export interface Zne1FileEncryption {
+  byteLength: number
+  sha256: string
+  plaintextByteLength: number
+  plaintextSha256: string
+}
+
 const CloudFiles = registerPlugin<{
   inspect(options: { uri: string; textCandidate: boolean }): Promise<CloudFileFingerprint>
   copy(options: { from: string; to: string; byteLength: number; sha256: string }): Promise<void>
   download(options: { url: string; headers: Record<string, string>; to: string; byteLength: number; sha256: string }): Promise<void>
+  /** Writes the header, then the sealed chunks. Rejects with INVALID_ENCRYPT_REQUEST or CLOUD_FILE_ENCRYPT_FAILED. */
+  encryptFile(options: Zne1FileRequest): Promise<Zne1FileEncryption>
+  /**
+   * Writes the plaintext and resolves its length and SHA-256. Rejects with
+   * E2EE_TAMPERED (the file does not begin with `header`, a chunk fails
+   * authentication, or the input stops early), E2EE_MALFORMED (shorter than a
+   * header, or an empty last chunk after a full one), INVALID_DECRYPT_REQUEST
+   * or CLOUD_FILE_DECRYPT_FAILED. Every rejection deletes the partial output.
+   */
+  decryptFile(options: Zne1FileRequest): Promise<{ byteLength: number; sha256: string }>
+  /**
+   * Base64 of up to `length` bytes (at most 65536) from the start of a file;
+   * a ZNE1 header is 74. Rejects with INVALID_HEADER_REQUEST or
+   * CLOUD_FILE_READ_FAILED.
+   */
+  readHeader(options: { source: string; length: number }): Promise<{ base64: string }>
 }>('ZenDirectUpload')
+
+/** Base64 of what one ZNE1 object's native chunk loop needs; never a parent key. */
+export type Zne1NativeKeys = Pick<Zne1FileRequest, 'header' | 'objectKey' | 'aad'>
+
+/** Where encrypted uploads are sealed: inside the vault's private sync folder, which sync never uploads from. */
+const UPLOAD_SEALING_DIRECTORY = '.zennotes/sync/uploads'
 
 export function isSafRoot(uri: string | null | undefined): boolean {
   return typeof uri === 'string' && uri.startsWith('content://')
@@ -423,6 +474,63 @@ export class NativeFs {
       await CloudFiles.download({ ...options, to: target.uri })
     } catch (error) {
       await this.deleteFile(options.to).catch(() => {})
+      throw error
+    }
+  }
+
+  /** Seal a file into a fresh private ZNE1 file for an encrypted vault's
+   * streamed upload. JavaScript hands over only the object key, header and AAD
+   * the vault cipher made for this one file, so the plaintext never crosses the
+   * bridge. The caller discards the sealed file when the upload ends, however
+   * it ends. */
+  async sealForUpload(sourceUri: string, params: Zne1ChunkCipherParams): Promise<MobileSealedUploadFile> {
+    const path = `${UPLOAD_SEALING_DIRECTORY}/${randomUUID()}.zne1`
+    await this.mkdir(UPLOAD_SEALING_DIRECTORY)
+    await this.writeBase64(path, '')
+    const discard = () => this.deleteFile(path).catch(() => {})
+    try {
+      const target = await this.statOrNull(path)
+      if (!target) throw new Error('Encrypted upload staging file is unavailable.')
+      const sealed = await CloudFiles.encryptFile({
+        source: sourceUri, destination: target.uri,
+        header: toBase64(params.header), objectKey: toBase64(params.objectKey), aad: toBase64(params.aad)
+      })
+      return { ...sealed, uri: target.uri, discard }
+    } catch (error) {
+      await discard()
+      throw error
+    }
+  }
+
+  /** Base64 of up to `length` leading bytes of a vault file, without reading
+   * the rest: the header JavaScript checks before native code opens a staged
+   * ZNE1 object. */
+  async readHeader(relPath: string, length: number): Promise<string> {
+    const file = await this.statOrNull(relPath)
+    if (file?.type !== 'file') throw new Error('Cloud staging file is unavailable.')
+    return (await CloudFiles.readHeader({ source: file.uri, length })).base64
+  }
+
+  /** Open a staged ZNE1 file into a fresh file with the native chunk loop.
+   * Native code checks that the file still begins with the header JavaScript
+   * checked and writes only chunks that authenticate. The destination is
+   * created first because a document provider can only open what exists, and
+   * a failure removes it again. */
+  async decryptFile(options: { from: string; to: string } & Zne1NativeKeys): Promise<{ byteLength: number; sha256: string }> {
+    const { from, to, header, objectKey, aad } = options
+    if (from === to) throw new Error('Invalid Cloud file decryption.')
+    if (await this.statVerified(to) !== null) throw new Error('Cloud decryption destination already exists.')
+    const source = await this.statOrNull(from)
+    if (source?.type !== 'file') throw new Error('Cloud staging file is unavailable.')
+    const parent = to.includes('/') ? to.slice(0, to.lastIndexOf('/')) : ''
+    if (parent) await this.mkdir(parent)
+    await this.writeBase64(to, '')
+    try {
+      const target = await this.statOrNull(to)
+      if (!target) throw new Error('Cloud decryption staging file is unavailable.')
+      return await CloudFiles.decryptFile({ source: source.uri, destination: target.uri, header, objectKey, aad })
+    } catch (error) {
+      await this.deleteFile(to).catch(() => {})
       throw error
     }
   }

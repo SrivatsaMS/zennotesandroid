@@ -39,6 +39,7 @@ import type { NativeFs } from './native-fs'
 import { cloudSyncWorkBudget, decodeCloudSyncBase64 } from './cloud-sync-work'
 import { CLOUD_SYNC_INLINE_UPLOAD_LIMIT_BYTES, rememberMobileUploadSource } from './mobile-direct-upload'
 import { isNotFoundError } from './fs-errors'
+import { randomUUID } from './uuid'
 import { NativeCloudStaging, type CloudStagingNative } from './cloud-sync-staging'
 
 export interface ScanCacheEntry {
@@ -52,7 +53,8 @@ export interface ScanCacheEntry {
 
 export type ScanCache = Record<string, ScanCacheEntry>
 
-type CloudSyncNativeFiles = Pick<NativeFs, 'readdirStrict' | 'readForSync' | 'statOrNull' | 'copyForSync'> & Partial<CloudStagingNative>
+type CloudSyncNativeFiles = Pick<NativeFs, 'readdirStrict' | 'readForSync' | 'statOrNull' | 'copyForSync'> &
+  Partial<CloudStagingNative> & Partial<Pick<NativeFs, 'sealForUpload'>>
 
 export interface ScanCacheStore {
   loadTracked(): Promise<CloudSyncState | null>
@@ -209,10 +211,13 @@ class NativeCloudSyncContent {
     await this.assertReady()
     const file = await this.native.readForSync(path, TEXT_EXTENSIONS.has(extension(path)), uri)
     if (file.byteLength > CLOUD_SYNC_INLINE_UPLOAD_LIMIT_BYTES) {
+      // An encrypted vault seals this file natively from the same URI, into
+      // this vault's own private sync folder.
+      const sealForUpload = this.native.sealForUpload?.bind(this.native)
       const content = rememberMobileUploadSource({
         encoding: file.utf8 ? 'utf8' : 'base64', data: '', sha256: file.sha256,
         byte_length: file.byteLength, media_type: mediaType(path, file.utf8)
-      }, file.uri)
+      }, file.uri, sealForUpload)
       this.sources.set(content, { path, hash: file.sha256, bytes: file.byteLength })
       return {
         path,
@@ -262,8 +267,8 @@ class NativeCloudSyncContent {
     const kind = await this.fs.stat(path)
     if (kind === 'directory') throw new Error('The destination is a directory.')
     const before = kind === 'file' ? await this.read(path) : null
-    const temporary = `.zennotes/sync/write-${crypto.randomUUID()}${extension(path)}`
-    const backup = `.zennotes/sync/rollback-${crypto.randomUUID()}${extension(path)}`
+    const temporary = `.zennotes/sync/write-${randomUUID()}${extension(path)}`
+    const backup = `.zennotes/sync/rollback-${randomUUID()}${extension(path)}`
     let publishing = false
     let completed = false
     try {

@@ -13,6 +13,7 @@ import java.nio.charset.CodingErrorAction;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import java.util.Arrays;
 
 /** Bounded file inspection and copying, including UTF-8 sequences split across reads. */
 final class CloudFileStream {
@@ -73,7 +74,19 @@ final class CloudFileStream {
         output.flush();
     }
 
-    private static MessageDigest digest() {
+    /** Up to `limit` bytes from the start of a stream, never reading past them. */
+    static byte[] readPrefix(InputStream input, int limit) throws IOException {
+        byte[] buffer = new byte[limit];
+        int filled = 0;
+        while (filled < limit) {
+            int count = input.read(buffer, filled, limit - filled);
+            if (count == -1) break;
+            filled += count;
+        }
+        return filled == limit ? buffer : Arrays.copyOf(buffer, filled);
+    }
+
+    static MessageDigest digest() {
         try {
             return MessageDigest.getInstance("SHA-256");
         } catch (NoSuchAlgorithmException impossible) {
@@ -81,7 +94,7 @@ final class CloudFileStream {
         }
     }
 
-    private static String hex(byte[] bytes) {
+    static String hex(byte[] bytes) {
         char[] alphabet = "0123456789abcdef".toCharArray();
         char[] out = new char[bytes.length * 2];
         for (int i = 0; i < bytes.length; i++) {

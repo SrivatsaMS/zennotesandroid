@@ -21,8 +21,24 @@ import {
   type CloudAuthPending,
   type CloudAuthStorage
 } from '@zennotes/shared-domain/cloud-auth-flow'
+import {
+  CloudE2eeKeyring,
+  type CloudAccountKeyStore,
+  type StoredCloudAccountKey
+} from '@zennotes/shared-domain/cloud-e2ee-account'
 import { createCloudSyncClient, stopMobileCloudRequests, resumeMobileCloudRequests, mobileCloudRequestSignal } from './cloud-sync-client'
 import { publishWithStagedUploads, type CloudPublishAssetPlatform } from '@zennotes/shared-domain/cloud-publish-uploads'
+
+/**
+ * Whether this build lets ZenNotes Cloud serve it end-to-end encrypted vaults
+ * (docs/specs/cloud-e2ee.md in the desktop repo). It may be on only while every
+ * path an encrypted vault's bytes can take is sealed and opened on this
+ * device: the core seals inline content, mobile-direct-upload seals streamed
+ * uploads natively, and the shared download staging opens references
+ * natively. Off, the client never sends the encryption header, so the service
+ * refuses encrypted vaults to this app, and Settings never offers encryption.
+ */
+export const MOBILE_CLOUD_END_TO_END_ENCRYPTION = true
 
 const DEVELOPMENT_CLOUD_BASE_URL = import.meta.env.VITE_ZENNOTES_CLOUD_DEV_URL?.trim()
 const PRODUCTION_CLOUD_BASE_URL = 'https://zennotes.org'
@@ -30,6 +46,8 @@ const LEGACY_CLOUD_BASE_URL = 'https://zennotes.laravel.cloud'
 const DEFAULT_CLOUD_BASE_URL = DEVELOPMENT_CLOUD_BASE_URL || PRODUCTION_CLOUD_BASE_URL
 const PENDING_AUTH_KEY = 'pending-auth'
 const CREDENTIAL_KEY = 'credential'
+/** One entry per account: a fingerprint of the base URL and the lowercased email follows. */
+const ACCOUNT_KEY_PREFIX = 'e2ee-account-key.'
 const accountListeners = new Set<(status: CloudAccountStatus) => void>()
 
 let authFlow: CloudAuthFlow | null = null
@@ -116,18 +134,118 @@ const storage: CloudAuthStorage = {
   },
   async saveCredential(credential: CloudAuthCredential): Promise<void> {
     stopMobileCloudRequests()
+    forgetKeyring()
     assertNativeCloudAuth()
     await secureStorageReady()
-    const canonicalCredential = migrateLegacyCloudCredential(credential).value
+    const canonicalCredential = migrateLegacyCloudCredential(credential).value as CloudAuthCredential
+    // Another account's encryption key does not outlive a switch to this one;
+    // signing in again to the same account keeps this device unlocked. Each
+    // entry belongs to one account and can never unlock another, so a failed
+    // sweep must not block signing in; signing out sweeps again and must work.
+    await clearAccountKeys(
+      await accountKeyName(canonicalCredential.base_url, canonicalCredential.account.user.email)
+    ).catch(() => {})
     await SecureStorage.setItem(CREDENTIAL_KEY, JSON.stringify(canonicalCredential))
     if (appActive) resumeMobileCloudRequests()
   },
   async deleteCredential(): Promise<void> {
     stopMobileCloudRequests()
+    forgetKeyring()
     if (!Capacitor.isNativePlatform()) return
     await secureStorageReady()
+    // Signing out also forgets this device's encryption keys; the passphrase
+    // or the recovery key unlocks it again.
+    await clearAccountKeys()
     await SecureStorage.removeItem(CREDENTIAL_KEY)
   }
+}
+
+async function clearAccountKeys(keep: string | null = null): Promise<void> {
+  for (const key of await SecureStorage.keys()) {
+    if (key.startsWith(ACCOUNT_KEY_PREFIX) && key !== keep) await SecureStorage.removeItem(key)
+  }
+}
+
+async function accountKeyName(baseUrl: string, email: string): Promise<string> {
+  const scope = `${baseUrl.trim().replace(/\/+$/, '')}\n${email.trim().toLowerCase()}`
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(scope))
+  return ACCOUNT_KEY_PREFIX + [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, '0')).join('')
+}
+
+/**
+ * This device's unlocked end-to-end encryption key for one account, kept in
+ * the Keystore-backed storage that holds the credential. A missing or
+ * unreadable entry reads as locked: with allowBackup, a restored install gets
+ * the stored value back but not the Keystore key that decrypts it, and that
+ * must ask for the passphrase again rather than fail on every read.
+ */
+export function mobileCloudAccountKeyStore(baseUrl: string, email: string): CloudAccountKeyStore {
+  return {
+    async load(): Promise<StoredCloudAccountKey | null> {
+      if (!Capacitor.isNativePlatform()) return null
+      try {
+        await secureStorageReady()
+        return parseStoredAccountKey(await SecureStorage.getItem(await accountKeyName(baseUrl, email)))
+      } catch {
+        return null
+      }
+    },
+    async save(value: StoredCloudAccountKey): Promise<void> {
+      assertNativeCloudAuth()
+      await secureStorageReady()
+      await SecureStorage.setItem(await accountKeyName(baseUrl, email), JSON.stringify(value))
+    },
+    async clear(): Promise<void> {
+      if (!Capacitor.isNativePlatform()) return
+      await secureStorageReady()
+      await SecureStorage.removeItem(await accountKeyName(baseUrl, email))
+    }
+  }
+}
+
+function parseStoredAccountKey(raw: string | null): StoredCloudAccountKey | null {
+  if (raw === null) return null
+  try {
+    const value = JSON.parse(raw) as Partial<StoredCloudAccountKey> | null
+    // A 32-byte key is 44 base64 characters; anything else could never open a vault.
+    return value?.format === 1 && typeof value.key === 'string' && /^[A-Za-z0-9+/]{43}=$/.test(value.key) &&
+      typeof value.version === 'number' && Number.isInteger(value.version) && value.version >= 0
+      ? { format: 1, key: value.key, version: value.version }
+      : null
+  } catch {
+    return null
+  }
+}
+
+let keyringCache: { scope: string; keyring: CloudE2eeKeyring } | null = null
+
+/** Which signed-in credential this is: the account, and the token that signs in as it. */
+export function mobileCloudCredentialScope(credential: CloudAuthCredential): string {
+  return JSON.stringify([credential.base_url, credential.account.user.email.toLowerCase(), credential.token])
+}
+
+/**
+ * One keyring per signed-in credential, so the "is this vault encrypted"
+ * answers and opened ciphers last across calls but never across accounts.
+ */
+export function mobileCloudKeyring(credential: CloudAuthCredential): CloudE2eeKeyring {
+  const scope = mobileCloudCredentialScope(credential)
+  if (keyringCache?.scope === scope) return keyringCache.keyring
+  forgetKeyring()
+  const keyring = new CloudE2eeKeyring({
+    listVaults: async () => (await createCloudSyncClient(credential.base_url, credential.token, {
+      accountId: credential.account.user.email,
+      signal: mobileCloudRequestSignal()
+    }).listVaults()).data,
+    store: mobileCloudAccountKeyStore(credential.base_url, credential.account.user.email)
+  })
+  keyringCache = { scope, keyring }
+  return keyring
+}
+
+function forgetKeyring(): void {
+  keyringCache?.keyring.forget()
+  keyringCache = null
 }
 
 export async function configureMobileCloudAuth(appVersion: string): Promise<void> {
@@ -140,6 +258,7 @@ export async function configureMobileCloudAuth(appVersion: string): Promise<void
     storage,
     openExternal: openExternalBrowser,
     exchange: exchangeCloudAuthCode,
+    revoke: revokeMobileCloudDevice,
     allowInsecureLoopback: import.meta.env.DEV,
     allowedInsecureOrigins: DEVELOPMENT_CLOUD_BASE_URL
       ? [DEVELOPMENT_CLOUD_BASE_URL]
@@ -237,7 +356,11 @@ export async function authenticatedClient() {
   const signal = mobileCloudRequestSignal()
   const credential = await authenticatedCredential()
   if (signal.aborted) throw new DOMException('Cloud account changed while loading credentials.', 'AbortError')
-  return createCloudSyncClient(credential.base_url, credential.token, { accountId: credential.account.user.email, signal })
+  return createCloudSyncClient(credential.base_url, credential.token, {
+    accountId: credential.account.user.email,
+    signal,
+    ...(MOBILE_CLOUD_END_TO_END_ENCRYPTION ? { keyring: mobileCloudKeyring(credential) } : {})
+  })
 }
 
 export async function authenticatedCredential(): Promise<CloudAuthCredential> {
@@ -279,6 +402,26 @@ function assertNativeCloudAuth(): void {
 
 async function openExternalBrowser(url: string): Promise<void> {
   window.open(url, '_blank', 'noopener,noreferrer')
+}
+
+/**
+ * Ask the service to end this device's access while the token still exists
+ * to ask with, as Connected apps on the website does. CloudAuthFlow signs out
+ * whatever the answer, and gives up waiting after a few seconds.
+ */
+async function revokeMobileCloudDevice(baseUrl: string, token: string): Promise<void> {
+  const response = await CapacitorHttp.request({
+    method: 'DELETE',
+    url: `${baseUrl}/api/v1/devices/current`,
+    headers: { Accept: 'application/json', Authorization: `Bearer ${token}` },
+    connectTimeout: 10_000,
+    readTimeout: 10_000,
+    disableRedirects: true
+  })
+  // 401 means the token is already gone, which is what was asked for.
+  if ((response.status < 200 || response.status >= 300) && response.status !== 401) {
+    throw new Error(`ZenNotes Cloud did not disconnect this device (${response.status}).`)
+  }
 }
 
 async function exchangeCloudAuthCode(

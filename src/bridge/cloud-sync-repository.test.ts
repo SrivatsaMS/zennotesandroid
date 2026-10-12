@@ -8,6 +8,7 @@ import type {
 import type { CloudSyncRepository } from '@zennotes/shared-domain/cloud-sync-coordinator'
 
 import { loadMobileModule } from '../../tooling/load-mobile-module.ts'
+import { withoutRandomUUID } from '../../tooling/without-random-uuid.ts'
 
 const { CachedCloudSyncRepository, mutateWithMobileDirectUploads } = await loadMobileModule([
   './src/bridge/cloud-sync-repository', './src/bridge/mobile-direct-upload'
@@ -582,6 +583,19 @@ describe('cached scan with the pinned conflict coordinator', () => {
     }), /source/)
     assert.deepEqual(h.writes, [])
     assert.equal(h.files.get('note.md')?.bytes.toString(), 'Keep me')
+  })
+
+  it('writes a Cloud change on a WebView without crypto.randomUUID', async () => {
+    await withoutRandomUUID(async () => {
+      const h = harness({ 'note.md': 'Old' })
+      const [local] = await h.repository.scan()
+      await h.repository.apply({ sequence: 2, item_id: 'item', revision: 2, type: 'upsert', path: 'note.md',
+        previous_path: null, content: content('New') }, { item_id: 'item', path: local.path, kind: local.kind,
+        revision: 1, sha256: local.content.sha256, byte_length: local.content.byte_length, media_type: local.content.media_type })
+      assert.equal(h.files.get('note.md')?.bytes.toString(), 'New')
+      assert.ok(h.writes.some((path) => /^\.zennotes\/sync\/write-[0-9a-f-]{36}\.md$/.test(path)))
+      assert.ok(h.writes.some((path) => /^\.zennotes\/sync\/rollback-[0-9a-f-]{36}\.md$/.test(path)))
+    })
   })
 
   it('uses streaming reads for inherited apply and preserves an unsynced large edit', async () => {
