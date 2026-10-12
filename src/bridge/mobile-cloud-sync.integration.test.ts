@@ -17,7 +17,10 @@ function textContent(text: string): CloudSyncContent {
 
 /** Real mobile adapter -> host service -> coordinator -> cached repository.
  * Only Capacitor storage/auth/layout and the server boundary are fakes. */
-async function fixture(initial: Record<string, string> = { 'note.md': 'Original' }) {
+async function fixture(
+  initial: Record<string, string> = { 'note.md': 'Original' },
+  mocks: Record<string, Record<string, unknown>> = {}
+) {
   const persisted = new Map<string, string>()
   const files = new Map(Object.entries(initial).map(([path, data]) => [
     path, { bytes: Buffer.from(data), mtime: 1000 }
@@ -183,7 +186,8 @@ async function fixture(initial: Record<string, string> = { 'note.md': 'Original'
       authenticatedCredential: async () => ({ base_url: 'https://sync.example.test', token: 'test-only' }),
       authenticatedClient: async () => remote,
       getMobileCloudAccountStatus: async () => accountStatus
-    }
+    },
+    ...mocks
   })
   await api.linkMobileCloudVault(vault, 'vault-1')
   const stateKey = () => [...persisted.keys()].find((path) => path.includes('/states/'))
@@ -519,5 +523,40 @@ describe('deleted Cloud vault recovery (#791)', () => {
     await rejected
 
     assert.deepEqual(await h.api.getMobileCloudVaultLink(h.vault), replacement)
+  })
+})
+
+describe('end-to-end encrypted vaults', () => {
+  const encryptedVaults = (encrypted: Set<string>, created: string[] = []) => ({
+    './mobile-cloud-encryption': {
+      ENCRYPTED_VAULT_BACKUP_DOWNLOAD_MESSAGE: 'Download backups of encrypted vaults from the ZenNotes desktop app.',
+      assertMobileCloudVaultCanLink: async () => {},
+      createMobileEncryptedCloudVault: async (name: string) => { created.push(name); return 'vault-2' },
+      isMobileCloudVaultEncrypted: async (vaultId: string) => encrypted.has(vaultId)
+    }
+  })
+
+  it('never saves an encrypted vault\'s backup archive and keeps its backups unlabeled', async () => {
+    const encrypted = new Set(['vault-1'])
+    const h = await fixture({}, encryptedVaults(encrypted))
+    const labels: (string | undefined)[] = []
+    Object.assign(h.remote, {
+      createBackup: async (_vaultId: string, label?: string) => { labels.push(label); return { data: { id: 'backup-2' } } }
+    })
+    await assert.rejects(h.api.downloadMobileCloudBackup(h.vault, 'backup-1'),
+      /^Error: Download backups of encrypted vaults from the ZenNotes desktop app\.$/)
+    await h.api.createMobileCloudBackup(h.vault, 'Before the trip')
+    encrypted.clear()
+    await h.api.createMobileCloudBackup(h.vault, 'Before the trip')
+    assert.deepEqual(labels, [undefined, 'Before the trip'])
+  })
+
+  it('creates an encrypted vault through the encryption layer and links this vault to it', async () => {
+    const created: string[] = []
+    const h = await fixture({}, encryptedVaults(new Set(), created))
+    const link = await h.api.createAndLinkMobileCloudVault(h.vault, 'Journal', { encrypted: true })
+    assert.deepEqual(created, ['Journal'])
+    assert.equal(link.vault_id, 'vault-2')
+    assert.deepEqual(await h.api.getMobileCloudVaultLink(h.vault), link)
   })
 })

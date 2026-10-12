@@ -1,11 +1,13 @@
 import type { CloudSyncChange, CloudSyncContentReference } from '@zennotes/bridge-contract/cloud-sync'
 import { cloudSyncPathKey, normalizeCloudSyncPath, shouldSyncVaultPath } from '@zennotes/shared-domain/cloud-sync'
+import { ZNE1_HEADER_BYTES, fromBase64, toBase64 } from '@zennotes/shared-domain/cloud-e2ee'
 import {
   cloudSyncStagedHandle,
   registerCloudSyncStagedFile,
   throwIfCloudSyncCancelled,
   validateCloudSyncContentReference,
   validateCloudSyncDownloadInstruction,
+  type CloudContentDecryptor,
   type CloudSyncDownloadSource,
   type CloudSyncStagedConflict,
   type CloudSyncStagedFile
@@ -13,6 +15,7 @@ import {
 import type { CloudSyncRepositoryConflict } from '@zennotes/shared-domain/cloud-sync-coordinator'
 import type { CloudSyncLocalItem, CloudSyncTrackedItem } from '@zennotes/shared-domain/cloud-sync-engine'
 import type { CloudFileFingerprint } from './native-fs'
+import { randomUUID } from './uuid'
 
 const ROLLBACK_DIRECTORY = '.zennotes/sync'
 const STAGING_DIRECTORY = `${ROLLBACK_DIRECTORY}/downloads`
@@ -27,7 +30,13 @@ export interface CloudStagingNative {
   deleteFile(path: string): Promise<void>
   mkdir(path: string): Promise<void>
   readText(path: string): Promise<string>
+  /** End-to-end encrypted vaults: base64 of up to `length` leading bytes of a file. */
+  readHeader?(path: string, length: number): Promise<string>
+  /** End-to-end encrypted vaults: opens a ZNE1 file into `to` with the native chunk loop. */
+  decryptFile?(options: { from: string; to: string; header: string; objectKey: string; aad: string }): Promise<{ byteLength: number; sha256: string }>
 }
+
+type NativeDecryption = Required<Pick<CloudStagingNative, 'readHeader' | 'decryptFile'>>
 
 interface StagedHandle {
   owner: object
@@ -46,10 +55,16 @@ export class NativeCloudStaging {
 
   async stage(source: CloudSyncDownloadSource): Promise<CloudSyncStagedFile> {
     const reference = validateCloudSyncContentReference(source.reference)
+    // An encrypted vault's download is ciphertext. It is verified against
+    // `encrypted`, opened by the native chunk loop into the staged file and
+    // deleted, so only plaintext checked against the reference can publish.
+    const open = reference.encrypted ? this.opener(source.decryptor) : null
     throwIfCloudSyncCancelled(source.signal)
     await this.native.mkdir(STAGING_DIRECTORY)
-    const path = `${STAGING_DIRECTORY}/${crypto.randomUUID()}`
+    const path = `${STAGING_DIRECTORY}/${randomUUID()}`
+    const download = open ? `${path}.sealed` : path
     const discard = async () => { await this.native.deleteFile(path).catch(() => {}) }
+    const discardDownload = async () => { await this.native.deleteFile(download).catch(() => {}) }
     try {
       for (let attempt = 0; attempt < 2; attempt++) {
         throwIfCloudSyncCancelled(source.signal)
@@ -60,19 +75,28 @@ export class NativeCloudStaging {
           if (attempt === 0) continue
           throw new Error('Cloud returned an expired download URL.')
         }
+        const expected = reference.encrypted ?? reference
         try {
           await this.native.download({
-            url: instruction.download.url, headers: instruction.download.headers, to: path,
-            byteLength: reference.byte_length, sha256: reference.sha256
+            url: instruction.download.url, headers: instruction.download.headers, to: download,
+            byteLength: expected.byte_length, sha256: expected.sha256
           })
         } catch (error) {
           if (attempt === 0 && isExpiredUrlError(error)) {
-            await discard()
+            await discardDownload()
             continue
           }
           throw error
         }
         throwIfCloudSyncCancelled(source.signal)
+        if (open) {
+          try {
+            await open(download, path, reference)
+          } finally {
+            await discardDownload()
+          }
+          throwIfCloudSyncCancelled(source.signal)
+        }
         const staged = await this.native.readForSync(path, false)
         if (staged.sha256 !== reference.sha256 || staged.byteLength !== reference.byte_length) {
           throw new Error('Cloud download failed length or SHA-256 verification.')
@@ -90,7 +114,24 @@ export class NativeCloudStaging {
       throw new Error('Cloud download could not be refreshed.')
     } catch (error) {
       await discard()
+      if (download !== path) await discardDownload()
       throw error
+    }
+  }
+
+  /** Checked before anything downloads: an encrypted reference needs its key and this device's native chunk loop. */
+  private opener(decryptor: CloudContentDecryptor | undefined) {
+    if (!decryptor) throw new Error('This encrypted download has no key to open it.')
+    const native = this.native
+    if (!hasNativeDecryption(native)) throw new Error('This device cannot open end-to-end encrypted Cloud files.')
+    return async (from: string, to: string, reference: CloudSyncContentReference): Promise<void> => {
+      const keys = await decryptor.openContentHeader(fromBase64(await native.readHeader(from, ZNE1_HEADER_BYTES)))
+      const opened = await native.decryptFile({
+        from, to, header: toBase64(keys.header), objectKey: toBase64(keys.objectKey), aad: toBase64(keys.aad)
+      })
+      if (opened.sha256 !== reference.sha256 || opened.byteLength !== reference.byte_length) {
+        throw new Error('Decrypted Cloud file is not the file its metadata names.')
+      }
     }
   }
 
@@ -197,7 +238,7 @@ export class NativeCloudStaging {
     // fail-closed recovery check (which lists that directory) sees it if the
     // process dies mid-publish. A stranded original must never read as a
     // local deletion on the next scan.
-    const backup = `${ROLLBACK_DIRECTORY}/rollback-${crypto.randomUUID()}`
+    const backup = `${ROLLBACK_DIRECTORY}/rollback-${randomUUID()}`
     let publishing = false
     try {
       throwIfCloudSyncCancelled(handle.signal)
@@ -253,6 +294,10 @@ export class NativeCloudStaging {
     throwIfCloudSyncCancelled(handle.signal)
     return handle
   }
+}
+
+function hasNativeDecryption(native: CloudStagingNative): native is CloudStagingNative & NativeDecryption {
+  return typeof native.readHeader === 'function' && typeof native.decryptFile === 'function'
 }
 
 function isExpiredUrlError(error: unknown): boolean {

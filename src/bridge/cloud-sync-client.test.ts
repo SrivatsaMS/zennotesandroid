@@ -141,3 +141,104 @@ it('preserves the requested change page size and metadata-only content budget', 
   assert.equal(request.searchParams.get('max_inline_bytes'), '0')
   assert.equal(request.searchParams.get('max_response_bytes'), '1048576')
 })
+
+function memoryKeyStore(value: { format: 1; key: string; version: number } | null) {
+  return { load: async () => value, save: async () => assert.fail('nothing saves here'), clear: async () => {} }
+}
+
+async function encryptedVaultFixture(name = 'Journal 2026') {
+  const { generateCloudE2eeKey, toBase64 } = await import('@zennotes/shared-domain/cloud-e2ee')
+  const { CloudVaultCipher } = await import('@zennotes/shared-domain/cloud-e2ee-vault')
+  const accountKey = generateCloudE2eeKey()
+  const vault = {
+    id: 'vault-1', name: 'Encrypted vault', cursor: 0, created_at: '2026-10-12T00:00:00Z', updated_at: '2026-10-12T00:00:00Z',
+    encryption: await CloudVaultCipher.prepareVault(name, accountKey, 1)
+  }
+  return { vault, unlocked: { format: 1 as const, key: toBase64(accountKey), version: 1 } }
+}
+
+it('announces end-to-end encryption only for a client given a keyring, and forwards request headers', async () => {
+  const { CloudE2eeKeyring } = await import('@zennotes/shared-domain/cloud-e2ee-account')
+  const requests: { headers: Record<string, string> }[] = []
+  const { createCloudSyncClient } = await loadMobileModule('./src/bridge/cloud-sync-client.ts', {
+    '@capacitor/core': {
+      registerPlugin: () => ({}),
+      CapacitorHttp: { request: async ({ headers }: { headers: Record<string, string> }) => {
+        requests.push({ headers })
+        return { status: 200, data: { data: [], cursor: 0, next_page: null } }
+      } }
+    }
+  })
+  const readable = { id: 'vault-1', name: 'Notes', cursor: 0, created_at: '', updated_at: '', encryption: null }
+  const keyring = new CloudE2eeKeyring({ listVaults: async () => [readable], store: memoryKeyStore(null) })
+  await createCloudSyncClient('https://example.test', 'test-only', { accountId: 'account' }).manifest('vault-1', { includeContent: false })
+  await createCloudSyncClient('https://example.test', 'test-only', { accountId: 'account', keyring }).manifest('vault-1', { includeContent: false })
+  assert.equal(requests[0]!.headers['X-ZenNotes-Encryption'], undefined)
+  assert.equal(requests[1]!.headers['X-ZenNotes-Encryption'], 'zne1')
+  assert.ok(requests.every(({ headers }) => headers.Authorization === 'Bearer test-only'))
+})
+
+it('lists an encrypted vault under its real name when this device is unlocked, and the placeholder when locked', async () => {
+  const { CloudE2eeKeyring } = await import('@zennotes/shared-domain/cloud-e2ee-account')
+  const { vault, unlocked } = await encryptedVaultFixture()
+  const readable = { id: 'vault-2', name: 'Notes', cursor: 0, created_at: '', updated_at: '', encryption: null }
+  const { createCloudSyncClient } = await loadMobileModule('./src/bridge/cloud-sync-client.ts', {
+    '@capacitor/core': {
+      registerPlugin: () => ({}),
+      CapacitorHttp: { request: async () => ({ status: 200, data: { data: [vault, readable] } }) }
+    }
+  })
+  const names = async (stored: typeof unlocked | null) => (await createCloudSyncClient('https://example.test', 'test-only', {
+    accountId: 'account',
+    keyring: new CloudE2eeKeyring({ listVaults: async () => [vault, readable], store: memoryKeyStore(stored) })
+  }).listVaults()).data.map((listed: { name: string }) => listed.name)
+  assert.deepEqual(await names(unlocked), ['Journal 2026', 'Notes'])
+  assert.deepEqual(await names(null), ['Encrypted vault', 'Notes'])
+})
+
+it('sends an encrypted vault\'s file direct once its ciphertext passes the inline cap, sealed and never readable', async () => {
+  const { CloudE2eeKeyring } = await import('@zennotes/shared-domain/cloud-e2ee-account')
+  const { zne1CiphertextLength } = await import('@zennotes/shared-domain/cloud-e2ee')
+  const { vault, unlocked } = await encryptedVaultFixture()
+  const requests: { method: string; path: string; headers: Record<string, string>; data: any }[] = []
+  const puts: any[] = []
+  const { createCloudSyncClient } = await loadMobileModule('./src/bridge/cloud-sync-client.ts', {
+    '@capacitor/core': {
+      registerPlugin: () => ({ put: async (request: unknown) => { puts.push(request); return { status: 200 } } }),
+      CapacitorHttp: { request: async ({ method, url, headers, data }: any) => {
+        const path = new URL(url).pathname
+        requests.push({ method, path, headers, data })
+        if (path.endsWith('/uploads')) {
+          return { status: 201, data: { data: {
+            id: 'upload-1', operation_id: data.operation_id, status: 'uploading', expected_bytes: data.content.byte_length,
+            expires_at: '2099-01-01T00:00:00Z', upload: { method: 'PUT', url: 'https://objects.example.test/put', headers: {} }
+          } } }
+        }
+        assert.ok(path.endsWith('/uploads/upload-1/complete'), `unexpected ${method} ${path}`)
+        return { status: 200, data: { data: { id: 'upload-1', operation_id: 'operation-1', status: 'completed',
+          result: { acknowledged: [{ operation_id: 'operation-1', item_id: 'item-1', revision: 1, sequence: 1 }], conflicts: [], cursor: 1 } } } }
+      } }
+    }
+  })
+  const keyring = new CloudE2eeKeyring({ listVaults: async () => [vault], store: memoryKeyStore(unlocked) })
+  const client = createCloudSyncClient('https://example.test', 'test-only', { accountId: 'account', keyring })
+  const bytes = Buffer.alloc(5 * 1024 * 1024 - 100, 4)
+  const result = await client.mutate('vault-1', { mutations: [{
+    type: 'upsert', operation_id: 'operation-1', item_id: 'item-1', base_revision: null, path: 'Scans/receipt.pdf', kind: 'binary',
+    content: { encoding: 'base64', data: bytes.toString('base64'), sha256: createHash('sha256').update(bytes).digest('hex'),
+      byte_length: bytes.length, media_type: 'application/pdf' }
+  }] })
+
+  assert.equal(result.acknowledged.length, 1)
+  assert.deepEqual(requests.map(({ method, path }) => `${method} ${path}`), [
+    'POST /api/v1/vaults/vault-1/uploads', 'POST /api/v1/vaults/vault-1/uploads/upload-1/complete'
+  ])
+  assert.ok(requests.every(({ headers }) => headers['X-ZenNotes-Encryption'] === 'zne1'))
+  const initiated = requests[0]!.data
+  assert.match(initiated.path, /^[0-9a-f]{64}$/)
+  assert.equal(JSON.stringify(initiated).includes('receipt'), false)
+  assert.deepEqual([initiated.kind, initiated.content.encoding, initiated.content.byte_length], ['binary', 'aes-gcm', zne1CiphertextLength(bytes.length)])
+  const sealed = Buffer.from(puts[0].base64, 'base64')
+  assert.equal(puts[0].sha256, createHash('sha256').update(sealed).digest('hex'))
+  assert.equal(sealed.subarray(0, 4).toString('latin1'), 'ZNE1')
+})

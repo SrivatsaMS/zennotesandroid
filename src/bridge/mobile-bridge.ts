@@ -100,6 +100,16 @@ import {
   updateMobileCloudPublishedNote
 } from './mobile-cloud-auth'
 import { uploadObject } from './cloud-sync-client'
+import {
+  changeMobileCloudEncryptionPassphrase,
+  finishMobileCloudEncryptionSetup,
+  finishNewMobileCloudRecoveryKey,
+  getMobileCloudEncryptionStatus,
+  lockMobileCloudEncryption,
+  prepareMobileCloudEncryptionSetup,
+  prepareNewMobileCloudRecoveryKey,
+  unlockMobileCloudEncryption
+} from './mobile-cloud-encryption'
 import { mobilePublishAssetPlatform } from './mobile-publish-assets'
 import {
   createAndLinkMobileCloudVault,
@@ -933,8 +943,20 @@ export const mobileBridge: ZenBridge = {
   listCloudVaults: listMobileCloudVaults,
   getCloudVaultLink: () => getMobileCloudVaultLink(activeMobileVault()),
   linkCloudVault: (vaultId) => linkMobileCloudVault(activeMobileVault(), vaultId),
-  createAndLinkCloudVault: (name) =>
-    createAndLinkMobileCloudVault(activeMobileVault(), name),
+  createAndLinkCloudVault: (name, options) =>
+    createAndLinkMobileCloudVault(activeMobileVault(), name, options),
+  // End-to-end encryption for the account. Settings shows it only while the
+  // service offers it and this build opted in (MOBILE_CLOUD_END_TO_END_ENCRYPTION).
+  // Moving an existing vault into an encrypted one (encryptCloudVault) stays
+  // desktop-only.
+  getCloudEncryptionStatus: getMobileCloudEncryptionStatus,
+  prepareCloudEncryptionSetup: prepareMobileCloudEncryptionSetup,
+  finishCloudEncryptionSetup: finishMobileCloudEncryptionSetup,
+  unlockCloudEncryption: unlockMobileCloudEncryption,
+  changeCloudEncryptionPassphrase: changeMobileCloudEncryptionPassphrase,
+  prepareNewCloudRecoveryKey: prepareNewMobileCloudRecoveryKey,
+  finishNewCloudRecoveryKey: finishNewMobileCloudRecoveryKey,
+  lockCloudEncryption: lockMobileCloudEncryption,
   unlinkCloudVault: () => unlinkMobileCloudVault(activeMobileVault()),
   deleteCloudVault: () => deleteMobileCloudVault(activeMobileVault()),
   syncCloudVault: () => syncMobileCloudVault(activeMobileVault()),
