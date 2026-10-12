@@ -62,6 +62,21 @@ public class CloudFileStreamTest {
             new ByteArrayInputStream(bytes), OutputStream.nullOutputStream(), bytes.length, hash(new byte[] { 1 })));
     }
 
+    @Test
+    public void readsOnlyTheRequestedPrefixAcrossShortReads() throws Exception {
+        byte[] bytes = new byte[200];
+        for (int i = 0; i < bytes.length; i++) bytes[i] = (byte) i;
+        InputStream input = new ByteArrayInputStream(bytes) {
+            @Override public synchronized int read(byte[] target, int offset, int length) {
+                return super.read(target, offset, Math.min(length, 7));
+            }
+        };
+        assertArrayEquals(Arrays.copyOf(bytes, 74), CloudFileStream.readPrefix(input, 74));
+        assertEquals("Nothing past the prefix is consumed", 126, input.available());
+        assertArrayEquals(new byte[] { 1, 2 }, CloudFileStream.readPrefix(new ByteArrayInputStream(new byte[] { 1, 2 }), 74));
+        assertArrayEquals(new byte[0], CloudFileStream.readPrefix(new ByteArrayInputStream(new byte[0]), 74));
+    }
+
     private static String hash(byte[] bytes) throws Exception {
         StringBuilder hex = new StringBuilder();
         for (byte value : MessageDigest.getInstance("SHA-256").digest(bytes)) hex.append(String.format("%02x", value));

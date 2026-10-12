@@ -6,6 +6,7 @@ import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.net.Uri;
 import android.os.Process;
+import android.provider.DocumentsContract;
 
 import com.getcapacitor.JSObject;
 import com.getcapacitor.Plugin;
@@ -39,6 +40,7 @@ public class DirectUploadPlugin extends Plugin {
     private static final int CONNECT_TIMEOUT_MS = 30_000;
     private static final int READ_TIMEOUT_MS = 300_000;
     private static final int BUFFER_SIZE = 64 * 1024;
+    private static final int HEADER_READ_LIMIT = 64 * 1024;
 
     @PluginMethod
     public void inspect(PluginCall call) {
@@ -143,6 +145,124 @@ public class DirectUploadPlugin extends Plugin {
                 if (connection != null) connection.disconnect();
             }
         });
+    }
+
+    /**
+     * Read the first bytes of a vault file, so JavaScript can check a staged
+     * ZNE1 object's header and key commitment before decryptFile opens its
+     * chunks. At most one chunk, so this never becomes a way to carry a whole
+     * file across the bridge.
+     */
+    @PluginMethod
+    public void readHeader(PluginCall call) {
+        execute(() -> {
+            Integer length = call.getInt("length");
+            if (length == null || length < 1 || length > HEADER_READ_LIMIT) {
+                call.reject("Invalid Cloud file header request.", "INVALID_HEADER_REQUEST");
+                return;
+            }
+            try (InputStream input = openVaultFile(call.getString("source"))) {
+                JSObject result = new JSObject();
+                result.put("base64", Base64.encodeToString(CloudFileStream.readPrefix(input, length), Base64.NO_WRAP));
+                call.resolve(result);
+            } catch (Exception error) {
+                call.reject("Cloud file header read failed.", "CLOUD_FILE_READ_FAILED", error);
+            }
+        });
+    }
+
+    /**
+     * Seal a vault file into a ZNE1 object for an end-to-end encrypted Cloud
+     * vault. JavaScript derives the object key, builds the header and computes
+     * the AAD, so no parent key crosses the bridge; the file moves in 64 KiB
+     * chunks and its bytes never enter the WebView. Resolves the ciphertext's
+     * length and SHA-256, which the upload declares, and the plaintext's,
+     * which the item metadata records.
+     */
+    @PluginMethod
+    public void encryptFile(PluginCall call) {
+        execute(() -> transformZne1(call, true));
+    }
+
+    /**
+     * Open a staged ZNE1 object into a vault staging file. JavaScript has
+     * already checked the header's key commitment; this confirms the file
+     * still begins with that header and writes only chunks that authenticate.
+     * Any failure deletes the partial output, so a truncated or forged object
+     * never lands as plaintext.
+     */
+    @PluginMethod
+    public void decryptFile(PluginCall call) {
+        execute(() -> transformZne1(call, false));
+    }
+
+    private void transformZne1(PluginCall call, boolean encrypt) {
+        String operation = encrypt ? "encryption" : "decryption";
+        Zne1FileCipher cipher;
+        try {
+            cipher = new Zne1FileCipher(decodeBase64(call, "header"), decodeBase64(call, "objectKey"),
+                decodeBase64(call, "aad"));
+        } catch (IllegalArgumentException error) {
+            call.reject("Invalid Cloud " + operation + " request.",
+                encrypt ? "INVALID_ENCRYPT_REQUEST" : "INVALID_DECRYPT_REQUEST");
+            return;
+        }
+        Uri written = null;
+        try {
+            Uri target = vaultFileUri(call.getString("destination"), Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
+            Uri source = vaultFileUri(call.getString("source"), Intent.FLAG_GRANT_READ_URI_PERMISSION);
+            if (source.equals(target)) throw new IOException("Cloud " + operation + " source and destination must differ.");
+            JSObject result = new JSObject();
+            try (InputStream input = openVaultFile(source.toString())) {
+                written = target;
+                try (OutputStream output = "content".equals(target.getScheme())
+                         ? getContext().getContentResolver().openOutputStream(target, "wt")
+                         : new FileOutputStream(target.getPath())) {
+                    if (output == null) throw new IOException("Cloud " + operation + " destination is unavailable.");
+                    if (encrypt) {
+                        Zne1FileCipher.Sealed sealed = cipher.encrypt(input, output);
+                        result.put("byteLength", sealed.byteLength);
+                        result.put("sha256", sealed.sha256);
+                        result.put("plaintextByteLength", sealed.plaintextByteLength);
+                        result.put("plaintextSha256", sealed.plaintextSha256);
+                    } else {
+                        Zne1FileCipher.Opened opened = cipher.decrypt(input, output);
+                        result.put("byteLength", opened.byteLength);
+                        result.put("sha256", opened.sha256);
+                    }
+                }
+            }
+            call.resolve(result);
+        } catch (Exception error) {
+            discard(written);
+            if (error instanceof Zne1FileCipher.Zne1Exception) {
+                call.reject(error.getMessage(), ((Zne1FileCipher.Zne1Exception) error).code, error);
+            } else {
+                call.reject("Cloud file " + operation + " failed.",
+                    encrypt ? "CLOUD_FILE_ENCRYPT_FAILED" : "CLOUD_FILE_DECRYPT_FAILED", error);
+            }
+        }
+    }
+
+    private static byte[] decodeBase64(PluginCall call, String name) {
+        String value = call.getString(name);
+        if (value == null) throw new IllegalArgumentException("Missing " + name + ".");
+        return Base64.decode(value, Base64.DEFAULT);
+    }
+
+    /** Remove a failed write's partial output, so part of a file can never pass for all of it. */
+    private void discard(Uri target) {
+        if (target == null) return;
+        if ("file".equals(target.getScheme())) {
+            new File(target.getPath()).delete();
+            return;
+        }
+        try {
+            DocumentsContract.deleteDocument(getContext().getContentResolver(), target);
+        } catch (Exception ignored) {
+            // The bridge deletes its staging document too; the rejection
+            // already marks this output as incomplete.
+        }
     }
 
     @PluginMethod
