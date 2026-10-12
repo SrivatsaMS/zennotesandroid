@@ -36,6 +36,7 @@ import {
   type RenameNoteRef
 } from '@zennotes/shared-domain/wikilink-rename'
 import { NativeFs } from './native-fs'
+import { randomUUID } from './uuid'
 import { ensureDownloaded } from './icloud'
 import { emitVaultChange } from './events'
 import {
@@ -103,7 +104,7 @@ interface SearchCandidate {
 }
 
 function uuid(): string {
-  return crypto.randomUUID()
+  return randomUUID()
 }
 
 /**

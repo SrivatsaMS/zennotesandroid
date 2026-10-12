@@ -6,6 +6,7 @@ import type {
 } from '@zennotes/bridge-contract/cloud-sync'
 import type { CloudSyncState } from '@zennotes/shared-domain/cloud-sync-engine'
 import { loadMobileModule } from '../../tooling/load-mobile-module.ts'
+import { withoutRandomUUID } from '../../tooling/without-random-uuid.ts'
 
 function textContent(text: string): CloudSyncContent {
   return {
@@ -396,6 +397,18 @@ describe('deleted Cloud vault recovery (#791)', () => {
     assert.equal(h.files.get('note.md')?.bytes.toString(), note)
     assert.deepEqual(await h.api.getMobileCloudVaultLink(otherVault), otherLink)
     assert.equal(h.persisted.get(otherStateKey), otherState)
+  })
+
+  it('archives a missing vault\'s state on a WebView without crypto.randomUUID', async () => {
+    const h = await fixture({})
+    await h.sync()
+    h.remote.changes = async () => { throw missing() }
+    h.remote.manifest = async () => { throw missing() }
+
+    await withoutRandomUUID(() => assert.rejects(h.sync()))
+
+    assert.equal(await h.api.getMobileCloudVaultLink(h.vault), null)
+    assert.ok([...h.persisted.keys()].some((path) => /\/retired-states\/.+\.[0-9a-f-]{36}\.json$/.test(path)))
   })
 
   it('preserves complete conflict drafts in unique inactive state archives when a Cloud vault disappears', async () => {

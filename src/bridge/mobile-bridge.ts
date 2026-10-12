@@ -84,6 +84,7 @@ import {
   resolveExternalVault
 } from './folder-picker'
 import { emitVaultChange, onVaultChange, onOpenNoteRequested, requestOpenNote } from './events'
+import { randomUUID } from './uuid'
 import { renderTikzOnDevice } from './tikz'
 import { fetchLinkMetadataOnDevice } from './link-metadata'
 import {
@@ -807,7 +808,7 @@ const droppedFiles = new Map<string, File>()
 
 function getPathForFile(file: File): string | null {
   if (!file) return null
-  const token = `mobile-drop://${crypto.randomUUID()}/${encodeURIComponent(file.name)}`
+  const token = `mobile-drop://${randomUUID()}/${encodeURIComponent(file.name)}`
   droppedFiles.set(token, file)
   return token
 }

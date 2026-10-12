@@ -1,3 +1,4 @@
+import './random-uuid-polyfill'
 import { Preferences } from '@capacitor/preferences'
 import { GESTURES_KEY, HIDE_STATUS_BAR_KEY, LAYOUT_MODE_KEY, START_SCREEN_KEY } from './viewport'
 

@@ -41,6 +41,7 @@ import {
 import { CachedCloudSyncRepository, type ScanCache } from './cloud-sync-repository'
 import { trackCloudSyncChanges } from './cloud-sync-refresh'
 import { isNotFoundError } from './fs-errors'
+import { randomUUID } from './uuid'
 
 const STORAGE_ROOT = 'zennotes-cloud-sync'
 const refreshStates = new WeakMap<MobileVault, { changed: boolean }>()
@@ -73,7 +74,7 @@ const persistence: CloudSyncHostPersistence = {
     }
     // Preserve the complete state, including unsent conflict drafts, before unlinking.
     await Filesystem.writeFile({
-      path: path.replace('/states/', '/retired-states/').replace(/\.json$/, `.${crypto.randomUUID()}.json`),
+      path: path.replace('/states/', '/retired-states/').replace(/\.json$/, `.${randomUUID()}.json`),
       directory: Directory.Data, encoding: Encoding.UTF8, data, recursive: true
     })
     await deleteDataFile(path)
@@ -283,7 +284,7 @@ export async function downloadMobileCloudBackup(
 
   const safeBackupId = backupId.replace(/[^a-zA-Z0-9-]/g, '')
   if (!safeBackupId) throw new Error('That backup identifier is invalid.')
-  const path = `zennotes-cloud-backups/${crypto.randomUUID()}/zennotes-backup-${safeBackupId}.json.gz`
+  const path = `zennotes-cloud-backups/${randomUUID()}/zennotes-backup-${safeBackupId}.json.gz`
   const url = `${credential.base_url}/api/v1/vaults/${encodeURIComponent(link.vault_id)}/backups/${encodeURIComponent(backupId)}/download`
   await Filesystem.downloadFile({
     url,
