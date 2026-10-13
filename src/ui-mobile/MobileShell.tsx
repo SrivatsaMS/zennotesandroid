@@ -1321,7 +1321,14 @@ const DESKTOP_ONLY_COMMAND_TITLES = [
   'Reset Zoom',
   'Open in Floating Window',
   'Export Note as PDF',
-  'Show Onboarding Wizard'
+  'Show Onboarding Wizard',
+  // 2.68.0 gates these desktop features itself: What's New on a desktop
+  // host, and the agent edit review rows on bridge methods this shell leaves
+  // out. Named here as well, so neither reaches the phone's palette if a later
+  // core relaxes its gate (this shell reports runtime 'web' and inherits
+  // whatever the web client is given).
+  'What\u2019s New in ZenNotes',
+  'Review Agent Changes'
 ]
 
 /** Additionally hidden on phones: splits/panes and the (replaced) sidebar
