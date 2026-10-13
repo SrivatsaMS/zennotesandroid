@@ -10,7 +10,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react'
 import ReactDOM from 'react-dom/client'
 import { getShellSnapshot, useShellSnapshot, setNoteSortOrder, type NoteSortOrder } from '@zennotes/app-core/shell'
 import { getBrowseSnapshot, useBrowseSnapshot, getBrowseDirectory, requestCreateBrowseFolder,
-  requestRenameBrowseFolder, requestRenameBrowseDatabase, requestMoveBrowseDirectory,
+  requestCreateBrowseNote, requestRenameBrowseFolder, requestRenameBrowseDatabase, requestMoveBrowseDirectory,
   requestDeleteBrowseDirectory } from '@zennotes/app-core/browse'
 import { useWorkspaceSnapshot, openLocalVault, pickLocalVault, refreshRemoteProfiles, connectRemoteWorkspace,
   connectRemoteProfile, changeRemoteVaultPath, deleteRemoteProfile } from '@zennotes/app-core/workspace'
@@ -79,6 +79,7 @@ const D = {
   sort: 'M4 6h16M4 12h10M4 18h5',
   check: 'M20 6L9 17l-5-5',
   folderPlus: 'M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V7zM12 11v6M9 14h6',
+  notePlus: 'M14 3H6a2 2 0 00-2 2v14a2 2 0 002 2h12a2 2 0 002-2V9l-6-6zM14 3v6h6M12 12v6M9 15h6',
   move: 'M5 8V6a2 2 0 012-2h3l2 2h7a2 2 0 012 2v10a2 2 0 01-2 2H7a2 2 0 01-2-2v-4M2 13h9m0 0l-3-3m3 3l-3 3',
   rename: 'M12 20h9M16.5 3.5a2.1 2.1 0 013 3L7 19l-4 1 1-4z',
   link: 'M10 13a5 5 0 007.54.54l3-3a5 5 0 00-7.07-7.07l-1.72 1.71M14 11a5 5 0 00-7.54-.54l-3 3a5 5 0 007.07 7.07l1.71-1.71',
@@ -609,7 +610,7 @@ export function VaultsSheet({ onClose }: { onClose: () => void }): React.JSX.Ele
               </div>
               {view.entry.tier === 'external' && (
                 <p className="zn-mobile-sheet-note">
-                  This folder belongs to you — removing it from the list never deletes its
+                  This folder belongs to you: removing it from the list never deletes its
                   files. Rename or move it in your file manager.
                 </p>
               )}
@@ -657,7 +658,7 @@ export function VaultsSheet({ onClose }: { onClose: () => void }): React.JSX.Ele
               <p className="zn-mobile-sheet-note">
                 Delete “{view.entry.name}”?{' '}
                 {view.entry.tier === 'icloud'
-                  ? 'Its notes will be removed from iCloud Drive — on every device.'
+                  ? 'Its notes will be removed from iCloud Drive on every device.'
                   : 'All of its notes will be deleted from this device.'}{' '}
                 This cannot be undone.
               </p>
@@ -683,7 +684,7 @@ export function VaultsSheet({ onClose }: { onClose: () => void }): React.JSX.Ele
             <>
               {backRow}
               <p className="zn-mobile-sheet-note">
-                “{view.name}” — {view.host}
+                “{view.name}” ({view.host})
                 {view.current ? ' · connected' : ''}
               </p>
               <div className="zn-mobile-sheet-group">
@@ -732,7 +733,7 @@ export function VaultsSheet({ onClose }: { onClose: () => void }): React.JSX.Ele
                 </button>
               </div>
               <p className="zn-mobile-sheet-note">
-                Removing a remote vault only forgets the saved connection — nothing on the
+                Removing a remote vault only forgets the saved connection: nothing on the
                 server is touched.
               </p>
             </>
@@ -999,6 +1000,14 @@ function MobileDrawerBody(props: {
   const newFolderHere = (): void => {
     void requestCreateBrowseFolder(captureMobileWorkspace(), path).catch(reportActionError)
   }
+  // A note made here lands in the folder on screen and opens on its title
+  // (#108). Before, a note could only start at the top and be moved, and
+  // "New Note in Current Folder" meant the open note's folder, not this one.
+  const newNoteHere = (): void => {
+    const host = captureMobileWorkspace()
+    const directory = path
+    go(() => requestCreateBrowseNote(host, directory).catch(reportActionError))
+  }
   // Core keeps the leaf name (a database keeps its .base suffix) and carries
   // tabs, folder icons, favorites and manual order to the new path. Folder
   // pins are keyed by subpath and are left alone, as Rename leaves them: an
@@ -1238,6 +1247,14 @@ function MobileDrawerBody(props: {
               childFiles.length === 0 && (
               <div className="zn-mobile-drawer-empty">No notes here yet</div>
             )}
+            <button
+              type="button"
+              className="zn-mobile-drawer-newnote"
+              onClick={newNoteHere}
+            >
+              <Icon d={D.notePlus} />
+              New note
+            </button>
             <button
               type="button"
               className="zn-mobile-drawer-newfolder"
