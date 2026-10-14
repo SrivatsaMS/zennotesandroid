@@ -2800,7 +2800,7 @@ function SettingsBackgroundSyncRow(): React.JSX.Element {
         <div className="zn-settings-layout-title">Sync in the background</div>
         <div className="zn-settings-layout-desc">
           {enabled
-            ? 'When you leave ZenNotes, it finishes sending your latest changes. While Android keeps it in memory, it also syncs about every 15 minutes.'
+            ? 'When you leave ZenNotes, it keeps going for a few seconds to send your latest changes. Android pauses it after that, so changes from your other devices arrive when you open it again.'
             : 'Leaving ZenNotes stops syncing at once. Anything not sent yet goes up when you open it again.'}
         </div>
       </div>

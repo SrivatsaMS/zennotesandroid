@@ -271,16 +271,14 @@ second binary copy, works back to minSdk 24, rejects redirects and unsafe URLs,
 and never receives the Cloud account token.
 
 Settings → Cloud → Sync in the background (on by default, per device) lets a
-sync finish after you leave the app and keeps syncing while Android keeps the
-app in memory. The sync engine runs in the WebView, which exists only while
-`MainActivity` does, so `BackgroundSyncPlugin` schedules a WorkManager job
-(every 15 minutes, network required, only while the setting is on and the
-vault is linked) that asks the live WebView for a sync and does nothing when
-the activity is gone. Leaving also queues a one-off catch-up run, dropped when
-the final sync ends, in case Android freezes the app midway. This is the one
-place the shells differ: the iPhone app has the leaving half only, since iOS
-suspends its WebView within seconds (`src/bridge/background-sync.ts`). With the
-setting off, leaving stops Cloud requests at once, as before.
+sync finish after you leave the app: Android keeps a backgrounded app running
+for a few seconds before its cached-app freezer stops it, WebView included,
+which is enough for that final sync (`src/bridge/background-sync.ts`, no
+native code). Nothing runs on a timer while the app is away. A WorkManager job
+every 15 minutes was tried against real Cloud: it fired on schedule, but a job
+unfreezes the app's process and not the WebView renderer the sync engine runs
+in, so the sync never ran. Changes from other devices arrive when the app
+opens. With the setting off, leaving stops Cloud requests at once, as before.
 
 ## Release verification
 
