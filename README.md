@@ -270,6 +270,16 @@ upload flow. `DirectUploadPlugin` streams decoded bytes without loading a
 second binary copy, works back to minSdk 24, rejects redirects and unsafe URLs,
 and never receives the Cloud account token.
 
+Settings → Cloud → Sync in the background (on by default, per device) lets a
+sync finish after you leave the app: Android keeps a backgrounded app running
+for a few seconds before its cached-app freezer stops it, WebView included,
+which is enough for that final sync (`src/bridge/background-sync.ts`, no
+native code). Nothing runs on a timer while the app is away. A WorkManager job
+every 15 minutes was tried against real Cloud: it fired on schedule, but a job
+unfreezes the app's process and not the WebView renderer the sync engine runs
+in, so the sync never ran. Changes from other devices arrive when the app
+opens. With the setting off, leaving stops Cloud requests at once, as before.
+
 ## Release verification
 
 Pull requests and `main` run bridge tests, strict filesystem tests, a

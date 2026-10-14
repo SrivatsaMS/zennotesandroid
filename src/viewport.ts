@@ -99,6 +99,11 @@ export const GESTURES_KEY = 'zn:gestures'
  *  like the other shell prefs. */
 export const START_SCREEN_KEY = 'zn:start-screen'
 
+/** localStorage key for Settings → Cloud → Sync in the background ('off';
+ *  absent = on), see bridge/background-sync.ts. Mirrored natively like the
+ *  other shell prefs. */
+export const BACKGROUND_SYNC_KEY = 'zn:background-sync'
+
 
 /** Publish the current decision to CSS. Safe to call repeatedly. */
 export function syncPhoneClass(): void {

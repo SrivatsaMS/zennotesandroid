@@ -1,6 +1,6 @@
 import './random-uuid-polyfill'
 import { Preferences } from '@capacitor/preferences'
-import { GESTURES_KEY, HIDE_STATUS_BAR_KEY, LAYOUT_MODE_KEY, START_SCREEN_KEY } from './viewport'
+import { BACKGROUND_SYNC_KEY, GESTURES_KEY, HIDE_STATUS_BAR_KEY, LAYOUT_MODE_KEY, START_SCREEN_KEY } from './viewport'
 
 const WEB_PREFERENCES_KEY = 'zen:prefs:v2'
 const NATIVE_PREFERENCES_KEY = 'zn-app-preferences-v2'
@@ -14,12 +14,16 @@ const NATIVE_GESTURES_KEY = 'zn-gestures'
 // And the Start screen choice (start-screen.ts): read at cold launch, so it
 // must be back in localStorage before main.tsx evaluates.
 const NATIVE_START_SCREEN_KEY = 'zn-start-screen'
+// And Sync in the background (bridge/background-sync.ts), so an evicted
+// WebView store does not quietly turn it back on.
+const NATIVE_BACKGROUND_SYNC_KEY = 'zn-background-sync'
 const MIRRORED_KEYS: Record<string, string> = {
   [WEB_PREFERENCES_KEY]: NATIVE_PREFERENCES_KEY,
   [LAYOUT_MODE_KEY]: NATIVE_LAYOUT_MODE_KEY,
   [HIDE_STATUS_BAR_KEY]: NATIVE_HIDE_STATUS_BAR_KEY,
   [GESTURES_KEY]: NATIVE_GESTURES_KEY,
-  [START_SCREEN_KEY]: NATIVE_START_SCREEN_KEY
+  [START_SCREEN_KEY]: NATIVE_START_SCREEN_KEY,
+  [BACKGROUND_SYNC_KEY]: NATIVE_BACKGROUND_SYNC_KEY
 }
 
 let persistenceQueue = Promise.resolve()
