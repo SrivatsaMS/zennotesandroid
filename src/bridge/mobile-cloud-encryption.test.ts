@@ -112,13 +112,14 @@ it('sets up, locks, unlocks, changes the passphrase and replaces the recovery ke
 
   await encryption.changePassphrase({ passphrase: PASSPHRASE }, NEXT_PASSPHRASE)
   await encryption.lock()
-  await assert.rejects(encryption.unlock({ passphrase: PASSPHRASE }), /does not unlock/)
+  // The wording is the core's (2.72.0 rewrote it); the code is the contract.
+  await assert.rejects(encryption.unlock({ passphrase: PASSPHRASE }), { code: 'wrong-key' })
   await encryption.unlock({ passphrase: NEXT_PASSPHRASE })
 
   const replaced = await encryption.prepareNewRecoveryKey({ passphrase: NEXT_PASSPHRASE })
   await encryption.finishNewRecoveryKey(replaced.setupId)
   await encryption.lock()
-  await assert.rejects(encryption.unlock({ recoveryWords: setup.recoveryWords.join(' ') }), /does not unlock/)
+  await assert.rejects(encryption.unlock({ recoveryWords: setup.recoveryWords.join(' ') }), { code: 'wrong-key' })
   await encryption.unlock({ recoveryWords: replaced.recoveryWords.join(' ') })
   assert.equal((await encryption.status()).unlocked, true)
 })

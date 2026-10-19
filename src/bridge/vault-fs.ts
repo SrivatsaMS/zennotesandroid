@@ -28,8 +28,15 @@ import { parseTaskFile, parseTasksFromBody } from '@zennotes/shared-domain/tasks
 import { normalizeHarperVaultState } from '@zennotes/shared-domain/harper-settings'
 import { normalizeNoteComments } from '@zennotes/shared-domain/note-comments'
 import { AGENT_EDITS_DIR, agentEditSidecarPath } from '@zennotes/shared-domain/agent-edits'
+import {
+  isPathExcludedFromTasks,
+  normalizeTasksExcludedFolders,
+  normalizeTasksIncludedFolders,
+  rewriteTasksFoldersForRename
+} from '@zennotes/shared-domain/tasks-excluded-folders'
 import { isFormDirName, isDatabaseInternalPath } from '@zennotes/shared-domain/databases'
 import { emptyExcalidrawDocument } from '@zennotes/shared-domain/excalidraw'
+import { pastedImageFilename } from '@zennotes/shared-domain/pasted-image'
 import { DEMO_TOUR_ASSETS, DEMO_TOUR_NOTES } from '@zennotes/shared-domain/demo-tour-data'
 import { currentDemoTourPath, DEMO_TOUR_DIR, demoTourNestedDirs } from '@zennotes/shared-domain/demo-tour'
 import { WELCOME_NOTE_PATH, WELCOME_NOTE_BODY } from './welcome-note'
@@ -138,6 +145,27 @@ function warnAboutDiscardedFolderPaths(parsed: unknown, settings: VaultSettings)
       `[zen] vault.json: systemFolderPaths.${folder} = ${JSON.stringify(value)} was ignored. ${reason}`
     )
   }
+}
+
+/**
+ * The Tasks folder lists validated the way desktop's normalizeTasksSettings
+ * validates them: the folders left out of Tasks (#458) and the Task folders
+ * it is narrowed to (#962). A hand-edited list that is not an array would
+ * otherwise reach a folder rename and refuse it. An empty list is left out,
+ * other keys under `tasks` pass through, and undefined comes back when
+ * nothing is left, so vault.json carries no empty stub.
+ */
+function normalizeTasksSettings(raw: unknown): VaultSettings['tasks'] | undefined {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return undefined
+  const { excludedFolders, includedFolders, ...rest } = raw as Record<string, unknown>
+  const excluded = normalizeTasksExcludedFolders(excludedFolders)
+  const included = normalizeTasksIncludedFolders(includedFolders)
+  const out = {
+    ...rest,
+    ...(excluded.length > 0 ? { excludedFolders: excluded } : {}),
+    ...(included.length > 0 ? { includedFolders: included } : {})
+  }
+  return Object.keys(out).length > 0 ? out : undefined
 }
 
 export class MobileVault {
@@ -316,6 +344,9 @@ export class MobileVault {
     // sync erases what the user taught it. Phones never run Harper themselves.
     const harper = normalizeHarperVaultState(obj.harper)
     if (harper) out.harper = harper
+    const tasks = normalizeTasksSettings(obj.tasks)
+    if (tasks) out.tasks = tasks
+    else delete out.tasks
     return out
   }
 
@@ -965,7 +996,11 @@ export class MobileVault {
       await this.setVaultSettings({
       ...settings,
       folderIcons: rekey(settings.folderIcons as Record<string, string>) as VaultSettings['folderIcons'],
-      folderColors: rekey(settings.folderColors as Record<string, string>) as VaultSettings['folderColors']
+      folderColors: rekey(settings.folderColors as Record<string, string>) as VaultSettings['folderColors'],
+      // The Tasks folder lists name on-disk paths, so they follow the folder
+      // too, as on desktop: a renamed Task folder (#962) left behind would
+      // match nothing and empty Tasks.
+      tasks: rewriteTasksFoldersForRename(settings.tasks, oldRel, newRel)
       })
       } catch (error) {
         try {
@@ -1197,11 +1232,28 @@ export class MobileVault {
     return fileTask ? [fileTask, ...inline] : inline
   }
 
+  /** The vault's Tasks folder lists from vault.json: the folders left out of
+   *  Tasks (#458) and the Task folders it is narrowed to (#962), empty
+   *  meaning the whole vault. */
+  private async tasksFolderLists(): Promise<{ excluded: string[]; included: string[] }> {
+    const tasks = (await this.getVaultSettings()).tasks
+    return {
+      excluded: normalizeTasksExcludedFolders(tasks?.excludedFolders),
+      included: normalizeTasksIncludedFolders(tasks?.includedFolders)
+    }
+  }
+
   async scanTasks(): Promise<VaultTask[]> {
+    // The Tasks folder lists travel in vault.json, so a folder the desktop
+    // left out (#458), or the Task folders it narrowed Tasks to (#962), apply
+    // here too; the frontmatter `tasks:` opt-out comes free from the shared
+    // parsers.
+    const { excluded, included } = await this.tasksFolderLists()
     const notes = await this.listNotes()
     const out: VaultTask[] = []
     for (const note of notes) {
       if (note.folder === 'trash') continue
+      if (isPathExcludedFromTasks(note.path, excluded, included)) continue
       if (!isMarkdownPath(note.path)) continue
       const body = await this.fs.readTextOrNull(note.path)
       if (body === null) continue
@@ -1216,6 +1268,10 @@ export class MobileVault {
     const rel = resolveSafeRel(relPath)
     const folder = await this.folderOf(rel)
     if (!folder || folder === 'trash') return []
+    // Same folder lists the full scan applies (#458, #962), or a single-note
+    // rescan would resurrect a left-out folder's tasks on every edit.
+    const { excluded, included } = await this.tasksFolderLists()
+    if (isPathExcludedFromTasks(rel, excluded, included)) return []
     if (!isMarkdownPath(rel)) return []
     const body = await this.fs.readTextOrNull(rel)
     if (body === null) return []
@@ -1346,10 +1402,14 @@ export class MobileVault {
   async importPastedImage(input: PastedImageInput): Promise<ImportedAsset> {
     const bytes =
       input.data instanceof Uint8Array ? input.data : new Uint8Array(input.data as ArrayBuffer)
-    const ext = pastedImageExtension(input.mimeType, input.suggestedName ?? null)
-    const base = pastedImageBaseName(input.suggestedName ?? null)
+    // The shared naming, as on the iPhone and the desktop: a clipboard bitmap
+    // the WebView calls image.png gets the timestamped name (#775).
+    const name = pastedImageFilename(
+      { mimeType: input.mimeType, suggestedName: input.suggestedName },
+      new Date()
+    )
     await this.fs.mkdir(ASSETS_DIR)
-    const filename = await this.uniqueFilename(ASSETS_DIR, `${base}${ext}`)
+    const filename = await this.uniqueFilename(ASSETS_DIR, name)
     const rel = `${ASSETS_DIR}/${filename}`
     await this.fs.writeBase64(rel, bytesToBase64(bytes))
     emitVaultChange({ kind: 'add', path: rel, folder: 'inbox', scope: 'content' })
@@ -1533,45 +1593,6 @@ export class MobileVault {
 // ---------------------------------------------------------------------------
 // Pasted image naming — mirrors vault.ts pastedImage* helpers
 // ---------------------------------------------------------------------------
-
-const PASTED_IMAGE_MIME_EXTENSIONS: Record<string, string> = {
-  'image/png': '.png',
-  'image/jpeg': '.jpg',
-  'image/jpg': '.jpg',
-  'image/gif': '.gif',
-  'image/webp': '.webp',
-  'image/avif': '.avif',
-  'image/svg+xml': '.svg'
-}
-
-function pastedImageExtension(mimeType: string, suggestedName: string | null): string {
-  if (suggestedName) {
-    const ext = extName(suggestedName).toLowerCase()
-    if (ext && ['.apng', '.avif', '.gif', '.jpeg', '.jpg', '.png', '.svg', '.webp'].includes(ext)) {
-      return ext
-    }
-  }
-  const mapped = PASTED_IMAGE_MIME_EXTENSIONS[mimeType.toLowerCase()]
-  if (mapped) return mapped
-  if (mimeType.toLowerCase().startsWith('image/')) return '.png'
-  throw new Error(`Unsupported pasted image type: ${mimeType}`)
-}
-
-function pastedImageTimestamp(now: Date): string {
-  const pad = (v: number): string => String(v).padStart(2, '0')
-  return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} ${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`
-}
-
-function pastedImageBaseName(suggestedName: string | null): string {
-  if (suggestedName) {
-    const base = stemName(suggestedName)
-      .replace(/[\\/:%*?"<>|[\]#^]/g, '-')
-      .replace(/\s+/g, ' ')
-      .trim()
-    if (base) return base
-  }
-  return `Pasted Image ${pastedImageTimestamp(new Date())}`
-}
 
 function bytesToBase64(bytes: Uint8Array): string {
   let binary = ''
