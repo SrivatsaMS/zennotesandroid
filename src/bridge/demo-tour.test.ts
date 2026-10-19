@@ -102,7 +102,10 @@ test('regenerating replaces a tour under its older names instead of writing a se
   for (const asset of DEMO_TOUR_ASSETS) assert.equal(fs.files.get(asset.path), asset.body)
   for (const path of USER_NOTES) assert.equal(fs.files.get(path), body(path), `${path} is the user's`)
   // One tour: the folder holds the tour's current notes and the user's, nothing else.
-  const tourNames = tourPaths().map((path) => path.slice('inbox/demo/'.length))
+  // The tour's notes, and since core 2.71.0 its sample drawing beside them.
+  const tourNames = [...tourPaths(), ...DEMO_TOUR_ASSETS.map((asset: { path: string }) => asset.path)]
+    .filter((path) => path.startsWith('inbox/demo/') && !path.slice('inbox/demo/'.length).includes('/'))
+    .map((path) => path.slice('inbox/demo/'.length))
   assert.deepEqual(fs.namesIn('inbox/demo'), [...tourNames, ...userNamesInDemo].sort())
   assert.deepEqual(result.notePaths, tourPaths())
 })
@@ -127,5 +130,18 @@ test('removing a tour that only exists under its older names leaves no folder be
   await vault.removeDemoTour()
 
   assert.deepEqual(fs.namesIn('inbox/demo'), [])
+  assert.equal(fs.directories.has('inbox/demo'), false)
+})
+
+test('removing the tour takes the sample database folder with it', async () => {
+  // Core 2.71.0 ships a database, which is a folder of its own; the tour
+  // folder could not go while that folder stayed behind.
+  const { fs, vault } = vaultWith([])
+
+  await vault.generateDemoTour()
+  assert.ok(fs.directories.has('inbox/demo/Reading List.base'))
+  await vault.removeDemoTour()
+
+  assert.equal(fs.directories.has('inbox/demo/Reading List.base'), false)
   assert.equal(fs.directories.has('inbox/demo'), false)
 })
