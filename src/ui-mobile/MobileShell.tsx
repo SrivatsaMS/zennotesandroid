@@ -57,7 +57,7 @@ import ensoUrl from '../assets/enso.png'
 import { getStoragePref } from '../bridge/icloud'
 import { backgroundSyncEnabled, setBackgroundSyncEnabled } from '../bridge/background-sync'
 import { getPinnedNotes, loadPins } from './pins'
-import { vaultSettingsAccessForLayout } from './vault-settings-access'
+import { placeVaultSettingsIsland, vaultSettingsAccessForLayout } from './vault-settings-access'
 import { getLayoutMode, isPhoneViewport, setLayoutMode, type LayoutMode } from '../viewport'
 import {
   applySystemBarsPreference,
@@ -2436,7 +2436,10 @@ function useVaultSettingsRows(): void {
       // which reads as the whole card blinking. Moving the same container
       // back in preserves the live React tree and its state.
       if (!host) return
-      if (container?.parentElement === host) return
+      // contains, not parentElement: on a tablet the container lives in the
+      // row's button group, and re-placing it on every mutation would fire
+      // this observer again forever.
+      if (container && host.contains(container)) return
       if (!container) {
         container = document.createElement('div')
         // The phone wrapper — not the list inside it — is the row's flex child,
@@ -2452,18 +2455,7 @@ function useVaultSettingsRows(): void {
           access === 'quick-switch' ? <SettingsVaultQuickSwitch /> : <SettingsVaultManageButton />
         )
       }
-      if (access === 'quick-switch') {
-        // The host is the desktop two-column row (label + "Change…" button),
-        // which the phone stylesheet wraps into a stack. Mount between the
-        // label and the row's own buttons, so the card reads location →
-        // picker list → actions and mobile.css can hide those buttons in
-        // favor of the island's own action group.
-        const firstBtn = host.querySelector('button')
-        if (firstBtn) host.insertBefore(container, firstBtn)
-        else host.appendChild(container)
-      } else {
-        host.appendChild(container)
-      }
+      placeVaultSettingsIsland(host, container, access)
     }
     const observer = new MutationObserver(() => sync())
     observer.observe(document.body, { childList: true, subtree: true })
