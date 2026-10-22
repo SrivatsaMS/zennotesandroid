@@ -193,6 +193,14 @@ export class NativeFs {
   readonly cloudRootUri: string | null
   /** Native URI of the vault root, resolved at open. */
   rootUri: string | null = null
+  /**
+   * Moves before and after every change this vault makes on disk, so a
+   * listing taken at one generation is known to predate nothing the app wrote
+   * since (MobileVault shares listings between overlapping tree walks on that
+   * promise). Writers outside the app are not counted; the foreground rescan
+   * is what finds those.
+   */
+  writeGeneration = 0
 
   constructor(vaultName: string, cloudRootUri: string | null = null) {
     this.rootPath = `${VAULTS_DIR}/${vaultName}`
@@ -207,6 +215,15 @@ export class NativeFs {
    *  every op must route through SafFs instead of Capacitor Filesystem. */
   private get saf(): boolean {
     return isSafRoot(this.cloudRootUri)
+  }
+
+  private async changing<T>(change: () => Promise<T>): Promise<T> {
+    this.writeGeneration += 1
+    try {
+      return await change()
+    } finally {
+      this.writeGeneration += 1
+    }
   }
 
   private loc(relPath: string): FsLocation {
@@ -316,28 +333,32 @@ export class NativeFs {
    * a note folder surfaces in listAssets and the sidebar as a stray file.
    */
   async writeText(relPath: string, body: string): Promise<void> {
-    if (this.saf) {
-      await SafFs.writeText({ root: this.cloudRootUri!, path: relPath, data: body })
-      return
-    }
-    await Filesystem.writeFile({
-      ...this.loc(relPath),
-      data: body,
-      encoding: Encoding.UTF8,
-      recursive: true
+    await this.changing(async () => {
+      if (this.saf) {
+        await SafFs.writeText({ root: this.cloudRootUri!, path: relPath, data: body })
+        return
+      }
+      await Filesystem.writeFile({
+        ...this.loc(relPath),
+        data: body,
+        encoding: Encoding.UTF8,
+        recursive: true
+      })
     })
   }
 
   /** Write binary data from a base64 string (Capacitor's native transport). */
   async writeBase64(relPath: string, base64Data: string): Promise<void> {
-    if (this.saf) {
-      await SafFs.writeBase64({ root: this.cloudRootUri!, path: relPath, data: base64Data })
-      return
-    }
-    await Filesystem.writeFile({
-      ...this.loc(relPath),
-      data: base64Data,
-      recursive: true
+    await this.changing(async () => {
+      if (this.saf) {
+        await SafFs.writeBase64({ root: this.cloudRootUri!, path: relPath, data: base64Data })
+        return
+      }
+      await Filesystem.writeFile({
+        ...this.loc(relPath),
+        data: base64Data,
+        recursive: true
+      })
     })
   }
 
@@ -403,49 +424,59 @@ export class NativeFs {
   }
 
   async mkdir(relPath: string): Promise<void> {
-    if (this.saf) {
-      await SafFs.mkdir({ root: this.cloudRootUri!, path: relPath })
-      return
-    }
-    await Filesystem.mkdir({ ...this.loc(relPath), recursive: true }).catch((err) => {
-      const msg = String((err as Error)?.message ?? err)
-      if (!/exist/i.test(msg)) throw err
+    await this.changing(async () => {
+      if (this.saf) {
+        await SafFs.mkdir({ root: this.cloudRootUri!, path: relPath })
+        return
+      }
+      await Filesystem.mkdir({ ...this.loc(relPath), recursive: true }).catch((err) => {
+        const msg = String((err as Error)?.message ?? err)
+        if (!/exist/i.test(msg)) throw err
+      })
     })
   }
 
   async rename(fromRel: string, toRel: string): Promise<void> {
-    if (this.saf) {
-      await SafFs.rename({ root: this.cloudRootUri!, from: fromRel, to: toRel })
-      return
-    }
-    const from = this.loc(fromRel)
-    const to = this.loc(toRel)
-    await Filesystem.rename({
-      from: from.path,
-      to: to.path,
-      directory: from.directory,
-      toDirectory: to.directory
+    await this.changing(async () => {
+      if (this.saf) {
+        await SafFs.rename({ root: this.cloudRootUri!, from: fromRel, to: toRel })
+        return
+      }
+      const from = this.loc(fromRel)
+      const to = this.loc(toRel)
+      await Filesystem.rename({
+        from: from.path,
+        to: to.path,
+        directory: from.directory,
+        toDirectory: to.directory
+      })
     })
   }
 
   async copy(fromRel: string, toRel: string): Promise<void> {
-    if (this.saf) {
-      await SafFs.copy({ root: this.cloudRootUri!, from: fromRel, to: toRel })
-      return
-    }
-    const from = this.loc(fromRel)
-    const to = this.loc(toRel)
-    await Filesystem.copy({
-      from: from.path,
-      to: to.path,
-      directory: from.directory,
-      toDirectory: to.directory
+    await this.changing(async () => {
+      if (this.saf) {
+        await SafFs.copy({ root: this.cloudRootUri!, from: fromRel, to: toRel })
+        return
+      }
+      const from = this.loc(fromRel)
+      const to = this.loc(toRel)
+      await Filesystem.copy({
+        from: from.path,
+        to: to.path,
+        directory: from.directory,
+        toDirectory: to.directory
+      })
     })
   }
 
   /** Copy into staging without carrying file bytes across the bridge or
    * reopening a remote document provider for every chunk. */
   async copyForSync(fromRel: string, toRel: string, byteLength: number): Promise<void> {
+    await this.changing(() => this.copyForSyncOnce(fromRel, toRel, byteLength))
+  }
+
+  private async copyForSyncOnce(fromRel: string, toRel: string, byteLength: number): Promise<void> {
     if (fromRel === toRel || !Number.isSafeInteger(byteLength) || byteLength < 0) {
       throw new Error('Invalid Cloud file copy.')
     }
@@ -464,6 +495,10 @@ export class NativeFs {
    * The native side verifies length and SHA-256 before resolving, so the
    * WebView never holds the body and a truncated download never lands. */
   async download(options: { url: string; headers: Record<string, string>; to: string; byteLength: number; sha256: string }): Promise<void> {
+    await this.changing(() => this.downloadOnce(options))
+  }
+
+  private async downloadOnce(options: { url: string; headers: Record<string, string>; to: string; byteLength: number; sha256: string }): Promise<void> {
     if (await this.statVerified(options.to) !== null) throw new Error('Cloud download destination already exists.')
     const parent = options.to.includes('/') ? options.to.slice(0, options.to.lastIndexOf('/')) : ''
     if (parent) await this.mkdir(parent)
@@ -517,6 +552,10 @@ export class NativeFs {
    * created first because a document provider can only open what exists, and
    * a failure removes it again. */
   async decryptFile(options: { from: string; to: string } & Zne1NativeKeys): Promise<{ byteLength: number; sha256: string }> {
+    return await this.changing(() => this.decryptFileOnce(options))
+  }
+
+  private async decryptFileOnce(options: { from: string; to: string } & Zne1NativeKeys): Promise<{ byteLength: number; sha256: string }> {
     const { from, to, header, objectKey, aad } = options
     if (from === to) throw new Error('Invalid Cloud file decryption.')
     if (await this.statVerified(to) !== null) throw new Error('Cloud decryption destination already exists.')
@@ -536,19 +575,23 @@ export class NativeFs {
   }
 
   async deleteFile(relPath: string): Promise<void> {
-    if (this.saf) {
-      await SafFs.delete({ root: this.cloudRootUri!, path: relPath })
-      return
-    }
-    await Filesystem.deleteFile(this.loc(relPath))
+    await this.changing(async () => {
+      if (this.saf) {
+        await SafFs.delete({ root: this.cloudRootUri!, path: relPath })
+        return
+      }
+      await Filesystem.deleteFile(this.loc(relPath))
+    })
   }
 
   async rmdir(relPath: string): Promise<void> {
-    if (this.saf) {
-      await SafFs.delete({ root: this.cloudRootUri!, path: relPath })
-      return
-    }
-    await Filesystem.rmdir({ ...this.loc(relPath), recursive: true })
+    await this.changing(async () => {
+      if (this.saf) {
+        await SafFs.delete({ root: this.cloudRootUri!, path: relPath })
+        return
+      }
+      await Filesystem.rmdir({ ...this.loc(relPath), recursive: true })
+    })
   }
 
   async exists(relPath: string): Promise<boolean> {
