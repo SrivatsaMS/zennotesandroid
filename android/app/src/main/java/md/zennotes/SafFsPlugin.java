@@ -63,10 +63,18 @@ public class SafFsPlugin extends Plugin {
 
     // ---- path plumbing ----------------------------------------------------
 
-    private static String clean(String rel) {
+    /**
+     * Only a whole ".." segment walks out of the vault. Dots inside a name are
+     * ordinary: a desktop quick note titled "It comes up... a brain dump." is
+     * saved as "It comes up... a brain dump..md", and turning that away as an
+     * escape stopped Cloud sync on the phone for good.
+     */
+    static String clean(String rel) {
         if (rel == null) return "";
         String r = rel.replaceAll("^/+", "").replaceAll("/+$", "");
-        if (r.contains("..")) throw new IllegalArgumentException("Path escapes the vault: " + rel);
+        for (String segment : r.split("/", -1)) {
+            if (segment.equals("..")) throw new IllegalArgumentException("Path escapes the vault: " + rel);
+        }
         return r;
     }
 
