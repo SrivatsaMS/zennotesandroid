@@ -205,8 +205,8 @@
    create row would cover the circle that made it. They sit where the dial's
    column starts instead, centered. */
 .zn-phone [data-toast-host] {
-  left: 1rem;
-  right: 1rem;
+  left: calc(1rem + env(safe-area-inset-left));
+  right: calc(1rem + env(safe-area-inset-right));
   bottom: calc(0.75rem + 54px + 0.875rem + env(safe-area-inset-bottom) + var(--zn-cloud-footer-height, 0px));
   align-items: center;
 }
@@ -309,7 +309,9 @@
   border-radius: 1.375rem 1.375rem 0 0;
   background: rgb(var(--z-bg-1));
   box-shadow: 0 -18px 50px -20px rgb(0 0 0 / 0.6);
-  padding: 0.5rem 0.875rem calc(0.75rem + env(safe-area-inset-bottom));
+  /* Side insets: a landscape navigation bar or cutout (0 in portrait). */
+  padding: 0.5rem calc(0.875rem + env(safe-area-inset-right))
+    calc(0.75rem + env(safe-area-inset-bottom)) calc(0.875rem + env(safe-area-inset-left));
   animation: zn-sheet-up 0.26s cubic-bezier(0.32, 0.72, 0.22, 1);
   translate: 0 var(--zn-sheet-drag, 0px);
   transition: translate 180ms ease-out;
@@ -685,9 +687,12 @@
    smallestWidth-based and therefore rotation-invariant, and sharing it with
    wireKeyboard's resize-mode choice keeps CSS and JS from drifting apart. */
 
+/* The side insets are 0 in portrait. In landscape they hold the camera
+   cutout and, with 3-button navigation, the navigation bar itself, which
+   since WebView 140 draws over the page rather than beside it. */
 .zn-mobile.zn-phone .zn-app-shell {
-  padding-top: env(safe-area-inset-top);
-  padding-bottom: calc(0.75rem + env(safe-area-inset-bottom));
+  padding: env(safe-area-inset-top) env(safe-area-inset-right)
+    calc(0.75rem + env(safe-area-inset-bottom)) env(safe-area-inset-left);
 }
 
 .zn-phone .zn-mobile-fab,
@@ -777,12 +782,14 @@
   top: 0;
   bottom: 0;
   left: 0;
-  width: min(84vw, 330px);
+  /* A left inset (landscape cutout or navigation bar) widens the drawer
+     rather than narrowing its rows. */
+  width: calc(min(84vw, 330px) + env(safe-area-inset-left));
   z-index: 49;
   display: flex;
   flex-direction: column;
   padding: calc(env(safe-area-inset-top) + 0.875rem) 0.75rem
-    calc(env(safe-area-inset-bottom) + 0.5rem);
+    calc(env(safe-area-inset-bottom) + 0.5rem) calc(0.75rem + env(safe-area-inset-left));
   background: rgb(var(--z-bg));
   box-shadow: 12px 0 40px -18px rgb(var(--z-shadow) / 0.55);
   animation: zn-slide-in-left 0.24s cubic-bezier(0.32, 0.72, 0.22, 1);
@@ -1224,6 +1231,7 @@
   z-index: 47;
   padding-top: env(safe-area-inset-top);
   padding-bottom: calc(0.75rem + env(safe-area-inset-bottom));
+  padding-left: env(safe-area-inset-left);
   background: rgb(var(--z-bg));
   box-shadow: 12px 0 40px -18px rgb(var(--z-shadow) / 0.5);
 }
@@ -1240,9 +1248,10 @@
   position: fixed;
   top: 0;
   bottom: 0;
-  right: 0;
-  left: 0;
-  width: 100vw !important;
+  right: env(safe-area-inset-right);
+  left: env(safe-area-inset-left);
+  /* Inset rather than padded: core gives each panel its own side padding. */
+  width: calc(100vw - env(safe-area-inset-left) - env(safe-area-inset-right)) !important;
   z-index: 47;
   padding-top: calc(env(safe-area-inset-top) + 2.75rem);
   padding-bottom: calc(0.75rem + env(safe-area-inset-bottom));
@@ -1253,7 +1262,7 @@
 .zn-phone .zn-panel-close {
   position: fixed;
   top: calc(env(safe-area-inset-top) + 0.4375rem);
-  right: 0.875rem;
+  right: calc(0.875rem + env(safe-area-inset-right));
   z-index: 48;
   min-height: 34px;
   padding: 0 0.875rem;
@@ -1272,14 +1281,55 @@
   padding: 0 !important;
 }
 
+/* The safe-area padding sits inside the 86dvh cap, so anything the panel
+   cannot fit paints into it: overflow:hidden clips at the padding edge, not
+   the content edge. Core sizes some dialog bodies in vh for the desktop
+   (Review sync changes: a 72vh scroller under its header), which on a phone
+   overruns the cap and left the body's last lines and buttons under the
+   navigation bar. Since WebView 140 the page draws under the system bars
+   (Capacitor stops padding the WebView natively), so that strip is covered,
+   not merely empty. A panel that still overflows scrolls instead, which puts
+   the padding at the end of the scroll; the sides clear a landscape
+   navigation bar or camera cutout. */
 .zn-mobile.zn-phone .z-modal[role='presentation'] > [role='dialog'],
 .zn-mobile.zn-phone .z-nested[role='presentation'] > [role='dialog'] {
   width: 100vw !important;
   max-width: 100vw !important;
   max-height: 86dvh;
   border-radius: 1.375rem 1.375rem 0 0 !important;
+  padding-right: env(safe-area-inset-right);
   padding-bottom: env(safe-area-inset-bottom);
+  padding-left: env(safe-area-inset-left);
+  overflow-y: auto;
+  overscroll-behavior: contain;
   animation: zn-sheet-up 0.26s cubic-bezier(0.32, 0.72, 0.22, 1);
+}
+
+/* Block panels (header, body, footer stacked) become a column whose
+   scrolling child gives up height first, so the body shrinks to the cap and
+   the header and footer stay in view. Panels core already lays out as a flex
+   column or a grid keep their own layout. */
+.zn-mobile.zn-phone .z-modal[role='presentation'] > [role='dialog']:not(.flex):not(.grid),
+.zn-mobile.zn-phone .z-nested[role='presentation'] > [role='dialog']:not(.flex):not(.grid) {
+  display: flex;
+  flex-direction: column;
+}
+
+.zn-mobile.zn-phone .z-modal[role='presentation'] > [role='dialog']:not(.flex):not(.grid) > *,
+.zn-mobile.zn-phone .z-nested[role='presentation'] > [role='dialog']:not(.flex):not(.grid) > * {
+  flex-shrink: 0;
+}
+
+.zn-mobile.zn-phone
+  .z-modal[role='presentation']
+  > [role='dialog']:not(.flex):not(.grid)
+  > :is([class*='overflow-y-auto'], [class*='overflow-auto']),
+.zn-mobile.zn-phone
+  .z-nested[role='presentation']
+  > [role='dialog']:not(.flex):not(.grid)
+  > :is([class*='overflow-y-auto'], [class*='overflow-auto']) {
+  flex-shrink: 1;
+  min-height: 0;
 }
 
 /* ---- Palettes (search / commands / buffers) ------------------------------ */
@@ -1306,7 +1356,11 @@
   max-height: none !important;
   border-radius: 0 !important;
   box-shadow: none !important;
-  padding-top: env(safe-area-inset-top);
+  /* The results run to the bottom edge, so without the bottom inset the
+     last rows could never scroll out from under the navigation bar. With
+     the keyboard up the inset reads 0 and the list meets the keyboard. */
+  padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom)
+    env(safe-area-inset-left);
   background: rgb(var(--z-bg)) !important;
   animation: zn-fade-in 0.15s ease;
 }
@@ -1330,7 +1384,7 @@
 .zn-mobile.zn-phone .zn-palette-cancel {
   position: absolute;
   top: calc(env(safe-area-inset-top) + 0.5rem);
-  right: 0.75rem;
+  right: calc(0.75rem + env(safe-area-inset-right));
   z-index: 2;
   min-height: 36px;
   padding: 0 0.5rem;
@@ -1379,7 +1433,10 @@
   max-height: 100dvh !important;
   border-radius: 0 !important;
   grid-template-columns: minmax(0, 1fr) !important;
-  padding-top: env(safe-area-inset-top);
+  /* Full height, so every edge is a system bar's: the footer note sat under
+     the navigation bar and, in landscape, a side bar covered Done. */
+  padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom)
+    env(safe-area-inset-left);
   animation: zn-sheet-up 0.26s cubic-bezier(0.32, 0.72, 0.22, 1);
 }
 
@@ -1398,7 +1455,7 @@
   /* Vertically centered on the "SETTINGS" header line (nav-bar feel),
      clear of the search field below it. */
   top: calc(env(safe-area-inset-top) + 0.4375rem);
-  right: 0.875rem;
+  right: calc(0.875rem + env(safe-area-inset-right));
   z-index: 5;
   min-height: 34px;
   padding: 0 0.875rem;
@@ -1424,7 +1481,7 @@
 .zn-phone .zn-settings-back {
   position: absolute;
   top: calc(env(safe-area-inset-top) + 0.5rem);
-  left: 0.5rem;
+  left: calc(0.5rem + env(safe-area-inset-left));
   z-index: 5;
   display: flex;
   align-items: center;
@@ -1615,6 +1672,17 @@
 /* Focused-row key chips ("Space check", "⏎ open"). */
 .zn-mobile.zn-phone span.pointer-events-none.rounded-md.border {
   display: none;
+}
+
+/* The date calendar's key help ("Arrows move. PageUp/PageDown change the
+   month…"), which the task menu's Choose a date… opens too; the Today
+   button beside it keeps its place on the right. */
+.zn-mobile.zn-phone [data-date-picker] div.justify-between > span:first-child:not([data-date-picker-month]) {
+  display: none;
+}
+
+.zn-mobile.zn-phone [data-date-picker] div.justify-between > span:first-child:not([data-date-picker-month]) + button {
+  margin-left: auto;
 }
 
 /* Command-palette shortcut chips ("⌘2", "Space m") — hardware-keyboard
@@ -1910,9 +1978,10 @@
   box-shadow: 0 1px 2px rgb(0 0 0 / 0.35);
 }
 
-/* "Group by" rows (tasks Kanban + database Board) render a desktop-size
-   native select — thumb-size it. The only two <select>s in app-core views
-   live in these rows, so the structural match is safe. */
+/* Select rows (the tasks Kanban's and the database Board's Group by, the
+   Tasks list's Order) render a desktop-size native select: thumb-size it.
+   The match is structural, so a select row core adds later is sized the
+   same way. */
 .zn-mobile.zn-phone .zn-app-shell div:has(> select) {
   flex: 1;
   gap: 0.5rem;
@@ -1925,6 +1994,13 @@
   padding: 0.5rem 0.75rem;
   border-radius: 0.625rem;
   font-size: 0.9375rem;
+}
+
+/* flex: 1 above lets a select row fill a toolbar line. A row stacked in a
+   column, like the Tasks list's Order row (core 2.76), keeps its own height
+   instead: grown, it split the screen with the list below it. */
+.zn-mobile.zn-phone .zn-app-shell .flex-col > div:has(> select) {
+  flex: none;
 }
 
 /* ---- Tags view ------------------------------------------------------------ */
@@ -2538,7 +2614,8 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: calc(2rem + env(safe-area-inset-top)) 2rem calc(2.5rem + env(safe-area-inset-bottom));
+  padding: calc(2rem + env(safe-area-inset-top)) calc(2rem + env(safe-area-inset-right))
+    calc(2.5rem + env(safe-area-inset-bottom)) calc(2rem + env(safe-area-inset-left));
   background: rgb(var(--z-bg, 29 32 33));
   color: rgb(var(--z-fg, 212 190 152));
   font-family:

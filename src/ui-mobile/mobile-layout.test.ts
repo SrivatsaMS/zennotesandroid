@@ -64,3 +64,53 @@ test('toasts on a phone sit where the dial column starts, clear of the ensō (#1
   assert.equal(groupedDeclaration('.zn-phone [data-toast-host]', 'bottom'), declaration('.zn-mobile-fab-menu', 'bottom'))
   assert.equal(groupedDeclaration('.zn-phone [data-toast-host]', 'align-items'), 'center')
 })
+
+// Since WebView 140 the page draws under the system bars, so nothing may
+// paint into an inset: Review sync changes left its last lines under the
+// 3-button navigation bar, and a landscape bar covered right-edge buttons.
+test('dialog sheets keep their content out of the navigation bar', () => {
+  const sheet = ".zn-mobile.zn-phone .z-modal[role='presentation'] > [role='dialog']"
+  assert.equal(groupedDeclaration(sheet, 'padding-bottom'), 'env(safe-area-inset-bottom)')
+  assert.equal(groupedDeclaration(sheet, 'padding-left'), 'env(safe-area-inset-left)')
+  assert.equal(groupedDeclaration(sheet, 'padding-right'), 'env(safe-area-inset-right)')
+  // overflow:hidden would clip at the padding edge and let overflow paint
+  // into the inset; a scroll puts the padding at the end instead.
+  assert.equal(groupedDeclaration(sheet, 'overflow-y'), 'auto')
+  const block = `${sheet}:not(.flex):not(.grid)`
+  assert.equal(groupedDeclaration(block, 'display'), 'flex')
+  assert.equal(groupedDeclaration(block, 'flex-direction'), 'column')
+  let scrollerShrinks = false
+  css.walkRules((rule) => {
+    if (rule.selector.includes(':not(.flex):not(.grid)') && rule.selector.includes('overflow-y-auto')) {
+      rule.walkDecls('min-height', (decl) => { scrollerShrinks = decl.value === '0' })
+    }
+  })
+  assert.ok(scrollerShrinks, 'a vh-capped scroller in a block panel must be able to shrink')
+})
+
+test('full-screen phone surfaces clear every system bar edge, landscape sides included', () => {
+  for (const selector of [
+    '.zn-mobile.zn-phone .zn-app-shell',
+    '.zn-mobile.zn-phone .z-palette > [role=\'dialog\']',
+    '.zn-mobile.zn-phone [data-zn-settings]'
+  ]) {
+    const padding = groupedDeclaration(selector, 'padding') ?? ''
+    for (const edge of ['top', 'right', 'bottom', 'left']) {
+      assert.ok(padding.includes(`env(safe-area-inset-${edge})`), `${selector} ${edge}`)
+    }
+  }
+  for (const selector of ['.zn-mobile-sheet', '.zn-phone .zn-mobile-drawer', '.zn-onboard']) {
+    assert.ok(groupedDeclaration(selector, 'padding')?.includes('env(safe-area-inset-left)'), selector)
+  }
+})
+
+test('a select row stacked in a column keeps its height; one on a toolbar line still fills it', () => {
+  assert.equal(declaration('.zn-mobile.zn-phone .zn-app-shell div:has(> select)', 'flex'), '1')
+  assert.equal(declaration('.zn-mobile.zn-phone .zn-app-shell .flex-col > div:has(> select)', 'flex'), 'none')
+})
+
+test('the date calendar hides its key help on phones and keeps Today on the right', () => {
+  const hint = '.zn-mobile.zn-phone [data-date-picker] div.justify-between > span:first-child:not([data-date-picker-month])'
+  assert.equal(declaration(hint, 'display'), 'none')
+  assert.equal(declaration(`${hint} + button`, 'margin-left'), 'auto')
+})

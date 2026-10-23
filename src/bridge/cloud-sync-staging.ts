@@ -1,5 +1,5 @@
 import type { CloudSyncChange, CloudSyncContentReference } from '@zennotes/bridge-contract/cloud-sync'
-import { cloudSyncPathKey, normalizeCloudSyncPath, shouldSyncVaultPath } from '@zennotes/shared-domain/cloud-sync'
+import { cloudSyncFreePath, cloudSyncPathKey, normalizeCloudSyncPath, shouldSyncVaultPath } from '@zennotes/shared-domain/cloud-sync'
 import { ZNE1_HEADER_BYTES, fromBase64, toBase64 } from '@zennotes/shared-domain/cloud-e2ee'
 import {
   cloudSyncStagedHandle,
@@ -183,7 +183,15 @@ export class NativeCloudStaging {
     const local = expected ? await this.fingerprint(expected) : null
     if ((local?.sha256 ?? null) !== input.expected_sha256) throw new Error('This file changed on this device.')
     const replacing = expected !== null && cloudSyncPathKey(expected) === cloudSyncPathKey(cloud)
-    if (!replacing && await this.native.statVerified(cloud) !== null) throw new Error(`${cloud} already exists.`)
+    // The other device's version goes where that device put it. A different
+    // file of this device already there moves to the next free name beside it,
+    // the way a second note moved into that folder is named. Dave's phone
+    // (2026-10-23) had trashed an Untitled.md of its own into the slot the
+    // computer's Untitled.md went to, and keeping the phone's version was the
+    // only way out of the conflict.
+    const displacement = replacing ? null
+      : await this.displacementFor(cloud, new Set([cloud, ...(keep ? [keep] : [])].map(cloudSyncPathKey)))
+    let displaced = false
     if (keep) {
       if (!expected || !local) throw new Error('Both versions are no longer available.')
       if (await this.native.statVerified(keep) !== null) throw new Error(`${keep} already exists.`)
@@ -204,8 +212,15 @@ export class NativeCloudStaging {
       if (expected && (await this.fingerprint(expected))?.sha256 !== input.expected_sha256) {
         throw new Error('This file changed on this device.')
       }
+      if (displacement) {
+        await this.native.rename(displacement.from, displacement.to)
+        displaced = true
+      }
       await this.publish(cloud, handle, input.file.reference, replacing ? input.expected_sha256 : null)
     } catch (error) {
+      if (displacement && displaced && await this.native.statVerified(displacement.from) === null) {
+        await this.native.rename(displacement.to, displacement.from).catch(() => {})
+      }
       // Remove only our unchanged duplicate after the original is confirmed
       // safe. A later edit or incomplete rollback must retain both copies.
       if (keep && expected && local) {
@@ -223,6 +238,23 @@ export class NativeCloudStaging {
       throwIfCloudSyncCancelled(handle.signal)
       await this.native.deleteFile(expected)
     }
+  }
+
+  /**
+   * The next free name beside `path` for a different file of this device
+   * that the other device's version has to replace, or null when the path is
+   * free: `Note 2.md`, then `Note 3.md`, the way core's cloudSyncFreePath
+   * names it on every host. Anything but a plain file keeps the choice
+   * refused.
+   */
+  private async displacementFor(path: string, reserved: Set<string>): Promise<{ from: string; to: string } | null> {
+    const occupant = await this.native.statVerified(path)
+    if (occupant === null) return null
+    if (occupant !== 'file') throw new Error(`${path} already exists.`)
+    const to = await cloudSyncFreePath(path, async (candidate) =>
+      reserved.has(cloudSyncPathKey(candidate)) || await this.native.statVerified(candidate) !== null)
+    reserved.add(cloudSyncPathKey(to))
+    return { from: path, to }
   }
 
   private async publish(path: string, handle: StagedHandle, reference: CloudSyncContentReference, expectedHash: string | null, previous?: CloudSyncTrackedItem): Promise<void> {
