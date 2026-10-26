@@ -242,3 +242,111 @@ it('sends an encrypted vault\'s file direct once its ciphertext passes the inlin
   assert.equal(puts[0].sha256, createHash('sha256').update(sealed).digest('hex'))
   assert.equal(sealed.subarray(0, 4).toString('latin1'), 'ZNE1')
 })
+
+it('lets a request go 30 s without a byte and a connection 15 s to open; only a publication waits longer', async () => {
+  const options: Array<{ connectTimeout?: number; readTimeout?: number }> = []
+  const { createCloudSyncClient } = await loadMobileModule('./src/bridge/cloud-sync-client.ts', {
+    '@capacitor/core': {
+      registerPlugin: () => ({}),
+      CapacitorHttp: { request: async (request: { connectTimeout?: number; readTimeout?: number }) => {
+        options.push(request)
+        return { status: 200, data: { data: [], id: 1, slug: 'note', url: 'https://example.test/s/note' } }
+      } }
+    }
+  })
+  const client = createCloudSyncClient('https://example.test', 'test-only', { accountId: 'account' })
+  await client.listVaults()
+  await client.publishNote({ note_path: 'Note.md', title: 'Note', markdown: 'Text' })
+  // Android's read timeout starts over with every byte, so 30 s is how long a
+  // request may go silent; a big page on a slow link takes as long as it needs.
+  assert.deepEqual(options.map(({ connectTimeout, readTimeout }) => ({ connectTimeout, readTimeout })), [
+    { connectTimeout: 15_000, readTimeout: 30_000 },
+    { connectTimeout: 15_000, readTimeout: 300_000 }
+  ])
+})
+
+it('sends a read that went silent again instead of failing the sync', async (t) => {
+  t.mock.method(Math, 'random', () => 0)
+  const paths: string[] = []
+  const { createCloudSyncClient } = await loadMobileModule('./src/bridge/cloud-sync-client.ts', {
+    '@capacitor/core': {
+      registerPlugin: () => ({}),
+      CapacitorHttp: { request: async ({ url }: { url: string }) => {
+        paths.push(new URL(url).pathname)
+        if (paths.length === 1) throw Object.assign(new Error('timeout'), { code: 'SocketTimeoutException' })
+        return { status: 200, data: { data: [] } }
+      } }
+    }
+  })
+  const client = createCloudSyncClient('https://example.test', 'test-only', { accountId: 'stalled-read' })
+  assert.deepEqual(await client.listVaults(), { data: [] })
+  assert.deepEqual(paths, ['/api/v1/vaults', '/api/v1/vaults'])
+})
+
+it('never sends a request again that the service might apply twice, and says the connection stalled', async () => {
+  let calls = 0
+  const { createCloudSyncClient } = await loadMobileModule('./src/bridge/cloud-sync-client.ts', {
+    '@capacitor/core': {
+      registerPlugin: () => ({}),
+      CapacitorHttp: { request: async () => {
+        calls++
+        throw Object.assign(new Error('timeout'), { code: 'SocketTimeoutException' })
+      } }
+    }
+  })
+  const { describeCloudError, CLOUD_TIMEOUT_MESSAGE } = await import('@zennotes/shared-domain/cloud-error-copy')
+  const client = createCloudSyncClient('https://example.test', 'test-only', { accountId: 'stalled-write' })
+  const error = await client.createVault('New vault').catch((failure: unknown) => failure)
+  assert.equal(calls, 1)
+  assert.equal((error as Error).name, 'CloudSyncTransportError')
+  assert.equal((error as { stalled?: boolean }).stalled, true)
+  assert.equal(describeCloudError(error).message, CLOUD_TIMEOUT_MESSAGE)
+})
+
+it('puts an object again when the store never answered, never when it refused', async (t) => {
+  t.mock.method(Math, 'random', () => 0)
+  for (const outcome of ['no answer', 'refused'] as const) {
+    const puts: Array<{ base64?: string }> = []
+    const requests: string[] = []
+    const { createCloudSyncClient } = await loadMobileModule('./src/bridge/cloud-sync-client.ts', {
+      '@capacitor/core': {
+        registerPlugin: () => ({ put: async (request: { base64?: string }) => {
+          puts.push(request)
+          if (puts.length > 1) return { status: 200 }
+          if (outcome === 'refused') return { status: 403 }
+          throw Object.assign(new Error('Cloud object upload failed.'), { code: 'DIRECT_UPLOAD_FAILED' })
+        } }),
+        CapacitorHttp: { request: async ({ method, url, data }: any) => {
+          const path = new URL(url).pathname
+          requests.push(`${method} ${path}`)
+          if (path.endsWith('/uploads')) {
+            return { status: 201, data: { data: {
+              id: 'upload-1', operation_id: data.operation_id, status: 'uploading', expected_bytes: data.content.byte_length,
+              expires_at: '2099-01-01T00:00:00Z', upload: { method: 'PUT', url: 'https://objects.example.test/put', headers: {} }
+            } } }
+          }
+          if (method === 'DELETE') return { status: 204, data: '' }
+          return { status: 200, data: { data: { id: 'upload-1', operation_id: 'operation-1', status: 'completed',
+            result: { acknowledged: [{ operation_id: 'operation-1', item_id: 'item-1', revision: 1, sequence: 1 }], conflicts: [], cursor: 1 } } } }
+        } }
+      }
+    })
+    const client = createCloudSyncClient('https://example.test', 'test-only', { accountId: `put-${outcome}` })
+    const bytes = Buffer.alloc(5 * 1024 * 1024 + 1, 7)
+    const mutation = client.mutate('vault-1', { mutations: [{
+      type: 'upsert', operation_id: 'operation-1', item_id: 'item-1', base_revision: null, path: 'Scans/receipt.pdf', kind: 'binary',
+      content: { encoding: 'base64', data: bytes.toString('base64'), sha256: createHash('sha256').update(bytes).digest('hex'),
+        byte_length: bytes.length, media_type: 'application/pdf' }
+    }] })
+    if (outcome === 'no answer') {
+      assert.equal((await mutation).acknowledged.length, 1)
+      assert.equal(puts.length, 2)
+      assert.equal(puts[1]!.base64, puts[0]!.base64)
+      assert.deepEqual(requests, ['POST /api/v1/vaults/vault-1/uploads', 'POST /api/v1/vaults/vault-1/uploads/upload-1/complete'])
+    } else {
+      await assert.rejects(mutation, /403/)
+      assert.equal(puts.length, 1)
+      assert.deepEqual(requests, ['POST /api/v1/vaults/vault-1/uploads', 'DELETE /api/v1/vaults/vault-1/uploads/upload-1'])
+    }
+  }
+})
