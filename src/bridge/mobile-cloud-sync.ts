@@ -341,6 +341,9 @@ export async function restoreMobileCloudBackupNote(
 }
 
 function hostVault(vault: MobileVault, cacheScan = false): CloudSyncHostVault {
+  // Folders this operation has made, so a pull asks for each one once rather
+  // than before every file it renames into place.
+  const folders = new Set<string>()
   const fs: PortableCloudSyncFileSystem = {
     // Sync must distinguish an unreadable provider from an empty vault.
     readdir: async (directory) =>
@@ -356,8 +359,18 @@ function hostVault(vault: MobileVault, cacheScan = false): CloudSyncHostVault {
     deleteFile: (path) => vault.fs.deleteFile(path),
     rename: async (from, to) => {
       const parent = to.includes('/') ? to.slice(0, to.lastIndexOf('/')) : ''
-      if (parent) await vault.fs.mkdir(parent)
-      await vault.fs.rename(from, to)
+      if (parent && !folders.has(parent)) {
+        await vault.fs.mkdir(parent)
+        folders.add(parent)
+      }
+      try {
+        await vault.fs.rename(from, to)
+      } catch (error) {
+        // The folder may have gone since: a rename into a missing folder
+        // fails before it changes anything, and the next one makes it again.
+        folders.delete(parent)
+        throw error
+      }
     }
   }
 

@@ -193,6 +193,8 @@ export class NativeFs {
   readonly cloudRootUri: string | null
   /** Native URI of the vault root, resolved at open. */
   rootUri: string | null = null
+  /** The local-tier Directory rootUri was resolved in. */
+  private rootDirectory: Directory | null = null
   /**
    * Moves before and after every change this vault makes on disk, so a
    * listing taken at one generation is known to predate nothing the app wrote
@@ -249,11 +251,13 @@ export class NativeFs {
     if (this.cloudRootUri) {
       this.rootUri = this.cloudRootUri
     } else {
+      const directory = vaultsRoot()
       const { uri } = await Filesystem.getUri({
         path: this.rootPath,
-        directory: vaultsRoot()
+        directory
       })
       this.rootUri = uri
+      this.rootDirectory = directory
     }
   }
 
@@ -310,12 +314,21 @@ export class NativeFs {
   }
 
   async readForSync(relPath: string, textCandidate: boolean, knownUri?: string): Promise<CloudFileFingerprint> {
+    return CloudFiles.inspect({ uri: knownUri ?? await this.fileUri(relPath), textCandidate })
+  }
+
+  private async fileUri(relPath: string): Promise<string> {
+    if (this.saf) return (await SafFs.stat({ root: this.cloudRootUri!, path: relPath })).uri
     const location = this.loc(relPath)
-    const uri = knownUri ?? (this.saf
-      ? (await SafFs.stat({ root: this.cloudRootUri!, path: relPath })).uri
-      : location.directory === undefined ? location.path
-        : (await Filesystem.getUri({ path: location.path, directory: location.directory })).uri)
-    return CloudFiles.inspect({ uri, textCandidate })
+    if (location.directory === undefined) return location.path
+    // getUri names a file by the root's URI (a folder's ends in a slash) and
+    // the path with each segment escaped exactly as encodeURIComponent does,
+    // so the root resolved at open saves a bridge call per file.
+    if (this.rootUri && location.directory === this.rootDirectory) {
+      if (!relPath) return this.rootUri
+      return `${this.rootUri.endsWith('/') ? this.rootUri : `${this.rootUri}/`}${encodeSegments(relPath)}`
+    }
+    return (await Filesystem.getUri({ path: location.path, directory: location.directory })).uri
   }
 
   async readTextOrNull(relPath: string): Promise<string | null> {
