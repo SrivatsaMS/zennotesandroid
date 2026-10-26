@@ -37,8 +37,12 @@ import java.util.Iterator;
  */
 @CapacitorPlugin(name = "ZenDirectUpload")
 public class DirectUploadPlugin extends Plugin {
-    private static final int CONNECT_TIMEOUT_MS = 30_000;
-    private static final int READ_TIMEOUT_MS = 300_000;
+    // The phones' stall bounds (shared-domain cloud-sync-stall.ts). The read
+    // timeout starts over with every byte that arrives, so it is how long a
+    // transfer may go silent, not how long a large one may take; JavaScript
+    // runs a transfer that went silent again.
+    private static final int CONNECT_TIMEOUT_MS = 15_000;
+    private static final int STALL_TIMEOUT_MS = 30_000;
     private static final int BUFFER_SIZE = 64 * 1024;
     private static final int HEADER_READ_LIMIT = 64 * 1024;
 
@@ -117,7 +121,7 @@ public class DirectUploadPlugin extends Plugin {
                 connection.setRequestMethod("GET");
                 connection.setInstanceFollowRedirects(false);
                 connection.setConnectTimeout(CONNECT_TIMEOUT_MS);
-                connection.setReadTimeout(READ_TIMEOUT_MS);
+                connection.setReadTimeout(STALL_TIMEOUT_MS);
                 connection.setRequestProperty("Accept-Encoding", "identity");
                 applyHeaders(connection, headers);
                 int status = connection.getResponseCode();
@@ -272,6 +276,7 @@ public class DirectUploadPlugin extends Plugin {
 
     private void upload(PluginCall call) {
         HttpURLConnection connection = null;
+        UploadStallWatchdog watchdog = null;
         try {
             String value = call.getString("url");
             String base64 = call.getString("base64");
@@ -291,15 +296,16 @@ public class DirectUploadPlugin extends Plugin {
             connection.setRequestMethod("PUT");
             connection.setInstanceFollowRedirects(false);
             connection.setConnectTimeout(CONNECT_TIMEOUT_MS);
-            connection.setReadTimeout(READ_TIMEOUT_MS);
+            connection.setReadTimeout(STALL_TIMEOUT_MS);
             connection.setDoOutput(true);
             connection.setFixedLengthStreamingMode(expectedBytes);
             applyHeaders(connection, headers);
 
+            watchdog = new UploadStallWatchdog(connection, STALL_TIMEOUT_MS);
             try (
                 InputStream decoded = sourceUri != null ? openVaultFile(sourceUri) : new Base64InputStream(
                     new ByteArrayInputStream(base64.getBytes(StandardCharsets.US_ASCII)), Base64.DEFAULT);
-                OutputStream output = connection.getOutputStream()
+                OutputStream output = watchdog.watch(connection.getOutputStream())
             ) {
                 if (expectedHash != null) {
                     CloudFileStream.copyVerified(decoded, output, expectedBytes, expectedHash);
@@ -315,6 +321,8 @@ public class DirectUploadPlugin extends Plugin {
                     output.flush();
                 }
             }
+            // The body is out; the read timeout bounds the wait for the answer.
+            watchdog.close();
 
             int status = connection.getResponseCode();
             drain(status >= 400 ? connection.getErrorStream() : connection.getInputStream());
@@ -324,6 +332,7 @@ public class DirectUploadPlugin extends Plugin {
         } catch (Exception error) {
             call.reject("Cloud object upload failed.", "DIRECT_UPLOAD_FAILED", error);
         } finally {
+            if (watchdog != null) watchdog.close();
             if (connection != null) connection.disconnect();
         }
     }

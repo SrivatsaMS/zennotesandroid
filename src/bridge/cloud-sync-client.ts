@@ -14,6 +14,13 @@ import type {
 import type { CloudE2eeKeyring } from '@zennotes/shared-domain/cloud-e2ee-account'
 import { ENCRYPTED_VAULT_PLACEHOLDER_NAME } from '@zennotes/shared-domain/cloud-e2ee-vault'
 import {
+  CLOUD_CONNECT_TIMEOUT_MS,
+  CLOUD_STALL_TIMEOUT_MS,
+  CLOUD_TRANSPORT_RETRY_DELAYS_MS,
+  CloudSyncTransportError,
+  retryCloudTransfer
+} from '@zennotes/shared-domain/cloud-sync-stall'
+import {
   MobileDirectUploadError,
   mutateWithMobileDirectUploads,
   type MobileObjectUpload
@@ -88,11 +95,13 @@ export function createCloudSyncClient(baseUrl: string, token: string, options: M
           ? await serializeFormData(request.body)
           : request.body,
         ...(multipart ? { dataType: 'formData' as const } : {}),
-        connectTimeout: 30_000,
-        // Attachment-heavy first syncs legitimately take longer on mobile.
-        // A short timeout repeatedly retries the same batch without progress.
-        readTimeout: request.timeoutMs ?? 300_000
-      })
+        connectTimeout: CLOUD_CONNECT_TIMEOUT_MS,
+        // Android's read timeout starts over with every byte that arrives, so
+        // this is how long a request may go silent, not how long it may take:
+        // a big page on a slow link keeps going as long as bytes move. A
+        // request that waits on the service's own work says so in timeoutMs.
+        readTimeout: request.timeoutMs ?? CLOUD_STALL_TIMEOUT_MS
+      }).catch((error: unknown) => { throw unanswered(error) })
 
       if (response.status < 200 || response.status >= 300) {
         const error = response.data?.error
@@ -128,10 +137,12 @@ export function createCloudSyncClient(baseUrl: string, token: string, options: M
 
   const loopback = /^http:\/\/(localhost|127\.\d+\.\d+\.\d+|\[::1\])(:\d+)?$/.test(normalizedBaseUrl)
   return new MobileCloudSyncApiClient(cloudSyncRateLimits.wrap(transport, {
-    baseUrl: normalizedBaseUrl, accountId: options.accountId, signal: lifetime
+    baseUrl: normalizedBaseUrl, accountId: options.accountId, signal: lifetime,
+    transportRetryDelaysMs: CLOUD_TRANSPORT_RETRY_DELAYS_MS
   }), async (request) => {
     if (lifetime.aborted) throw new DOMException('Cloud request cancelled.', 'AbortError')
-    await uploadObject(request)
+    // The same bytes to the same object: a PUT that got no answer is safe to send again.
+    await retryCloudTransfer(() => uploadObject(request), { signal: lifetime, isTransportFailure: unansweredUpload })
     if (lifetime.aborted) throw new DOMException('Cloud request cancelled.', 'AbortError')
   }, {
     // Streaming host: large revisions arrive as references and are downloaded
@@ -231,6 +242,26 @@ export const uploadObject: MobileObjectUpload = async (request) => {
       'DIRECT_UPLOAD_FAILED'
     )
   }
+}
+
+/**
+ * CapacitorHttp resolves any HTTP answer, error statuses included, so a
+ * rejection means none came: the request stalled past its read timeout, the
+ * connection dropped, or it never opened. Android names the Java exception
+ * in `code`.
+ */
+function unanswered(error: unknown): CloudSyncTransportError {
+  const { message, code } = (error ?? {}) as { message?: unknown; code?: unknown }
+  const name = typeof code === 'string' && code ? code : null
+  return new CloudSyncTransportError(
+    typeof message === 'string' && message ? message : 'ZenNotes Cloud did not answer.',
+    { code: name, stalled: name === 'SocketTimeoutException', cause: error }
+  )
+}
+
+/** The object store never answered the PUT (a status means it did). */
+function unansweredUpload(error: unknown): boolean {
+  return error instanceof MobileDirectUploadError && error.status === 0 && error.code === 'DIRECT_UPLOAD_FAILED'
 }
 
 function firstValidationMessage(errors: unknown): string | null {
