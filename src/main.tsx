@@ -20,6 +20,7 @@ import {
   mobileBackgroundSyncHost
 } from './bridge/mobile-bridge'
 import { installBackgroundSync } from './bridge/background-sync'
+import { installSystemBarTheme } from './bridge/system-bar-theme'
 import { configureMobileCloudAuth } from './bridge/mobile-cloud-auth'
 import { maybeRunFirstRunOnboarding } from './ui-mobile/Onboarding'
 import { installWidgetPublisher } from './bridge/widgets'
@@ -88,6 +89,8 @@ async function boot(): Promise<void> {
   // on the transient tab before the guard puts Home back.
   installHomeGuard()
   wireKeyboard()
+  // Before onboarding, which draws in the theme too.
+  installSystemBarTheme()
   wireForegroundRescan()
 
   // True first run: welcome + storage choice BEFORE the vault is created, so
