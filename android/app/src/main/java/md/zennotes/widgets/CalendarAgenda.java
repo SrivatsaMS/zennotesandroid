@@ -40,7 +40,8 @@ final class CalendarAgenda {
         final int type;
         final String iso;
         final CalendarWidgetData.Task task;
-        /** Header: open tasks that day (including any past the snapshot's cap). */
+        /** Header: open tasks that day (including any past the snapshot's
+         *  cap), less the ones a widget tap has ticked since. */
         final int count;
         /** Task: the latest widget tap on it, or null. */
         final WidgetActions.Mark mark;
@@ -64,7 +65,7 @@ final class CalendarAgenda {
         }
         for (String iso : week) {
             CalendarWidgetData.Day day = data.agenda.get(iso);
-            rows.add(new Row(HEADER, iso, null, day == null ? 0 : day.total, null));
+            rows.add(new Row(HEADER, iso, null, openCount(day, marks), null));
             if (day == null) continue;
             int shown = Math.min(day.tasks.size(), MAX_TASKS_PER_DAY);
             for (int i = 0; i < shown; i++) {
@@ -74,6 +75,25 @@ final class CalendarAgenda {
             if (day.total > shown) rows.add(new Row(MORE, iso, null, day.total - shown, null));
         }
         return rows;
+    }
+
+    /**
+     * A day's open tasks as the list draws them. The snapshot's `total`
+     * counts every task open when the app published it, and its rows stay
+     * listed, ticked, until a snapshot built after the app saw the tap
+     * replaces it; a row the log draws ticked is no longer open, so it comes
+     * off the count with the same tap, and goes back on with an untick. A
+     * newer snapshot no longer lists a task it saw ticked and prunes the
+     * tap, so nothing is taken off twice.
+     */
+    static int openCount(CalendarWidgetData.Day day, Map<String, WidgetActions.Mark> marks) {
+        if (day == null) return 0;
+        int ticked = 0;
+        for (CalendarWidgetData.Task task : day.tasks) {
+            WidgetActions.Mark mark = marks.get(task.id);
+            if (mark != null && mark.checked) ticked++;
+        }
+        return Math.max(0, day.total - ticked);
     }
 
     /** Position of the selected day's header, to scroll the list to. */
