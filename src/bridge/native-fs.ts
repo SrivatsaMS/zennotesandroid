@@ -317,7 +317,8 @@ export class NativeFs {
     return CloudFiles.inspect({ uri: knownUri ?? await this.fileUri(relPath), textCandidate })
   }
 
-  private async fileUri(relPath: string): Promise<string> {
+  /** Native URI of a vault file: content:// under a picked folder, file:// otherwise. */
+  async fileUri(relPath: string): Promise<string> {
     if (this.saf) return (await SafFs.stat({ root: this.cloudRootUri!, path: relPath })).uri
     const location = this.loc(relPath)
     if (location.directory === undefined) return location.path
