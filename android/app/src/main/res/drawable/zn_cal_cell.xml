@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Calendar widget day fill and field: white, tinted at update time like
+     zn_widget_bg (the theme's colors travel in the snapshot). -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="rectangle">
+    <solid android:color="#FFFFFFFF" />
+    <corners android:radius="6dp" />
+</shape>
