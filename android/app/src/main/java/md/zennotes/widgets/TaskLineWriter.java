@@ -65,8 +65,8 @@ final class TaskLineWriter {
                     ending = "\r";
                 }
                 String bom = "";
-                if (line == 0 && current.startsWith("﻿")) {
-                    bom = "﻿";
+                if (line == 0 && current.startsWith("\uFEFF")) {
+                    bom = "\uFEFF";
                     current = current.substring(1);
                 }
                 if (current.equals(wanted)) return true;
