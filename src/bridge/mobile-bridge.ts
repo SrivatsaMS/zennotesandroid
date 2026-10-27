@@ -86,6 +86,7 @@ import {
 import { emitVaultChange, onVaultChange, onOpenNoteRequested, requestOpenNote } from './events'
 import type { BackgroundSyncHost } from './background-sync'
 import { randomUUID } from './uuid'
+import { openAssetExternally } from './open-asset'
 import { renderTikzOnDevice } from './tikz'
 import { fetchLinkMetadataOnDevice } from './link-metadata'
 import {
@@ -1237,7 +1238,7 @@ export const mobileBridge: ZenBridge = {
   // 'desktop-only' token makes app-core show its friendly toast.
   openExternalFile: async () => ({ ok: false, error: 'desktop-only' }),
   openExternalUrl: async () => ({ ok: false, error: 'desktop-only' }),
-  openAssetExternally: async () => notImplemented('openAssetExternally'),
+  openAssetExternally: (relPath) => openAssetExternally(activeVault(), relPath),
   // Bookmark cards fetch open-graph metadata natively (link-metadata.ts) —
   // a WKWebView fetch of an arbitrary page would be CORS-blocked.
   fetchLinkMetadata: (url) => fetchLinkMetadataOnDevice(url),
