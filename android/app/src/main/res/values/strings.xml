@@ -25,6 +25,23 @@
     <string name="widget_empty_tasks_detail">Your tasks show up after the first scan.</string>
     <string name="widget_all_clear">All clear</string>
     <string name="widget_all_clear_detail">Nothing due today.</string>
+    <string name="widget_calendar_label">Calendar</string>
+    <string name="widget_calendar_description">The month, with each week\'s tasks to tick off.</string>
+    <string name="widget_calendar_previous_month">Previous month</string>
+    <string name="widget_calendar_next_month">Next month</string>
+    <string name="widget_calendar_mark_done">Mark done</string>
+    <string name="widget_calendar_mark_not_done">Mark not done</string>
+    <string name="widget_calendar_week_of">Week of %1$s</string>
+    <string name="widget_calendar_add_task">Add a task for %1$s\u2026</string>
+    <string name="widget_calendar_day_open">Day \u2192</string>
+    <string name="widget_calendar_day_create">Day +</string>
+    <string name="widget_calendar_week_open">Week \u2192</string>
+    <string name="widget_calendar_week_create">Week +</string>
+    <string name="widget_calendar_more">+%1$d more</string>
+    <string name="widget_calendar_out_of_range">Open ZenNotes to see this week.</string>
+    <string name="widget_calendar_daily_off">Daily notes are off</string>
+    <string name="widget_calendar_daily_off_detail">Turn them on in ZenNotes to list tasks by day.</string>
+    <string name="widget_calendar_empty_detail">The calendar fills in from your vault.</string>
     <!-- Static picker previews (API 31+). -->
     <string name="widget_preview_vault">My Vault</string>
     <string name="widget_preview_note_1">Reading list</string>
@@ -40,4 +57,9 @@
     <string name="widget_preview_task_2_detail">Product ideas</string>
     <string name="widget_preview_task_3">Reply to the design review</string>
     <string name="widget_preview_task_3_detail">Today</string>
+    <string name="widget_preview_month">October 2026</string>
+    <string name="widget_preview_week">Week of Oct 26 \u2013 Nov 1</string>
+    <string name="widget_preview_cal_task_1">Pick up the dry cleaning</string>
+    <string name="widget_preview_cal_task_2">Book the October flights</string>
+    <string name="widget_preview_cal_task_2_note">Trip planning</string>
 </resources>

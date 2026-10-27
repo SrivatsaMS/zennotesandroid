@@ -46,6 +46,22 @@ public final class WidgetLinks {
         return Uri.parse("zennotes://task?id=" + encode(id) + "&path=" + encode(path));
     }
 
+    /** The Calendar sheet on a day; `add` puts the cursor in "Add a task". */
+    public static Uri calendar(String iso, boolean add) {
+        if (iso == null) return Uri.parse("zennotes://calendar");
+        return Uri.parse("zennotes://calendar?date=" + encode(iso) + (add ? "&add=1" : ""));
+    }
+
+    /** The day's daily note, or the Calendar on that day when it has none. */
+    public static Uri day(String iso) {
+        return Uri.parse("zennotes://day?date=" + encode(iso));
+    }
+
+    /** The day's weekly note, or the Calendar on that day when it has none. */
+    public static Uri week(String iso) {
+        return Uri.parse("zennotes://week?date=" + encode(iso));
+    }
+
     static String encode(String value) {
         byte[] bytes = value.getBytes(StandardCharsets.UTF_8);
         StringBuilder out = new StringBuilder(bytes.length * 3);

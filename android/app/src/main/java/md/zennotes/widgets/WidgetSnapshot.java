@@ -38,9 +38,12 @@ public final class WidgetSnapshot {
     public final int todayCount;
     public final int overdueCount;
     public final boolean tasksReady;
+    /** Nullable: the Calendar widget's block (CalendarWidgetData). */
+    public final CalendarWidgetData calendar;
 
     private WidgetSnapshot(long generatedAt, String vaultName, Palette palette, List<Note> notes,
-                           List<Task> tasks, int todayCount, int overdueCount, boolean tasksReady) {
+                           List<Task> tasks, int todayCount, int overdueCount, boolean tasksReady,
+                           CalendarWidgetData calendar) {
         this.generatedAt = generatedAt;
         this.vaultName = vaultName;
         this.palette = palette;
@@ -49,6 +52,7 @@ public final class WidgetSnapshot {
         this.todayCount = todayCount;
         this.overdueCount = overdueCount;
         this.tasksReady = tasksReady;
+        this.calendar = calendar;
     }
 
     public static final class Note {
@@ -154,6 +158,17 @@ public final class WidgetSnapshot {
             }
         }
 
+        /** `color` laid over `base` at `alpha` (0..1), opaque. A tint must be
+         *  opaque: setColorFilter's SRC_ATOP keeps a translucent tint's white
+         *  drawable showing through, which reads as light grey on a dark theme. */
+        public static int over(int color, float alpha, int base) {
+            float a = Math.max(0f, Math.min(1f, alpha));
+            int r = Math.round(((color >> 16) & 0xFF) * a + ((base >> 16) & 0xFF) * (1 - a));
+            int g = Math.round(((color >> 8) & 0xFF) * a + ((base >> 8) & 0xFF) * (1 - a));
+            int b = Math.round((color & 0xFF) * a + (base & 0xFF) * (1 - a));
+            return 0xFF000000 | (r << 16) | (g << 8) | b;
+        }
+
         /** The color with its alpha replaced (0..1), for tinted circles behind glyphs. */
         public static int withAlpha(int color, float alpha) {
             int a = Math.max(0, Math.min(255, Math.round(alpha * 255)));
@@ -244,6 +259,6 @@ public final class WidgetSnapshot {
         int todayCount = counts != null ? counts.optInt("today", tasks.size()) : tasks.size();
         int overdueCount = counts != null ? counts.optInt("overdue", 0) : 0;
         return new WidgetSnapshot(generatedAt, vaultName, palette, notes, tasks, todayCount, overdueCount,
-                root.optBoolean("tasksReady", false));
+                root.optBoolean("tasksReady", false), CalendarWidgetData.parse(root.optJSONObject("calendar")));
     }
 }
