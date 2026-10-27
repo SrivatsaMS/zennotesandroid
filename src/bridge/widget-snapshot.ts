@@ -14,6 +14,7 @@
  */
 import type { NoteMeta } from '@zennotes/bridge-contract/ipc'
 import type { VaultTask } from '@zennotes/shared-domain/tasks'
+import type { WidgetCalendar } from './widget-calendar.ts'
 
 export const WIDGET_SNAPSHOT_VERSION = 1
 /** The list scrolls; a dozen keeps the widget useful at any height. */
@@ -76,6 +77,9 @@ export interface WidgetSnapshot {
   /** False until the first task scan for this vault has landed, so the
    *  widget shows "loading" rather than a misleading "All clear". */
   tasksReady: boolean
+  /** The Calendar widget's month marks and week agenda (widget-calendar.ts);
+   *  null while it could not be built. */
+  calendar: WidgetCalendar | null
 }
 
 /** ZenNotes' default theme (dark-hard), used before the first publish and

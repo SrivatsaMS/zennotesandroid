@@ -10,8 +10,12 @@ import com.getcapacitor.PluginCall;
 import com.getcapacitor.PluginMethod;
 import com.getcapacitor.annotation.CapacitorPlugin;
 
+import org.json.JSONException;
+import org.json.JSONObject;
+
 import java.io.IOException;
 
+import md.zennotes.widgets.WidgetActions;
 import md.zennotes.widgets.WidgetSnapshot;
 import md.zennotes.widgets.WidgetUpdater;
 
@@ -21,7 +25,9 @@ import md.zennotes.widgets.WidgetUpdater;
  * and ui-mobile/deep-links.ts run unchanged). The WebView publishes the
  * widget snapshot; this writes it into the app's private files and
  * re-renders every placed widget (md.zennotes.widgets). The widgets never
- * see the vault itself.
+ * see the vault itself, except that the Calendar widget writes a tick into
+ * the task's own line when that line is still the one the snapshot named;
+ * readActions hands its tap log back (src/bridge/widget-calendar.ts).
  */
 @CapacitorPlugin(name = "ZenWidgets")
 public class WidgetBridgePlugin extends Plugin {
@@ -68,8 +74,33 @@ public class WidgetBridgePlugin extends Plugin {
                 call.reject("Could not write the widget snapshot: " + e.getMessage());
                 return;
             }
+            WidgetActions.prune(context, actionsAck(json));
             WidgetUpdater.refreshAll(context);
             call.resolve();
+        }, "zn-widgets").start();
+    }
+
+    /** The newest Calendar widget tap this snapshot says the app applied. */
+    private static long actionsAck(String json) {
+        try {
+            JSONObject calendar = new JSONObject(json).optJSONObject("calendar");
+            return calendar == null ? 0 : (long) calendar.optDouble("actionsAck", 0);
+        } catch (JSONException e) {
+            return 0;
+        }
+    }
+
+    @PluginMethod
+    public void readActions(PluginCall call) {
+        final Context context = getContext().getApplicationContext();
+        new Thread(() -> {
+            try {
+                JSObject ret = new JSObject();
+                ret.put("actions", new com.getcapacitor.JSArray(WidgetActions.json(context)));
+                call.resolve(ret);
+            } catch (JSONException e) {
+                call.reject("Could not read the widget's taps: " + e.getMessage());
+            }
         }, "zn-widgets").start();
     }
 

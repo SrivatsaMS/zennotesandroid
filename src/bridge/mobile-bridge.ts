@@ -86,6 +86,7 @@ import {
 import { emitVaultChange, onVaultChange, onOpenNoteRequested, requestOpenNote } from './events'
 import type { BackgroundSyncHost } from './background-sync'
 import { randomUUID } from './uuid'
+import { openAssetExternally } from './open-asset'
 import { renderTikzOnDevice } from './tikz'
 import { fetchLinkMetadataOnDevice } from './link-metadata'
 import {
@@ -155,7 +156,7 @@ import {
 import { folderForRelativePath, posixNormalize, sanitizeNoteTitle } from './vault-core'
 import { isPhoneViewport } from '../viewport'
 
-let appVersion = '1.1.47'
+let appVersion = '1.1.48'
 
 export async function loadNativeAppVersion(): Promise<string> {
   try {
@@ -442,6 +443,18 @@ function activeMobileVault(): MobileVault {
     throw new Error('ZenNotes Cloud sync is available for on-device vaults only.')
   }
   return current
+}
+
+/** The open vault's root as a native URI (`file://`, or a SAF `content://`
+ *  tree for a picked folder), where the Calendar widget writes a tick; null
+ *  for a remote workspace, whose notes are not on this device. */
+export function activeVaultNativeRoot(): string | null {
+  try {
+    const current = activeVault()
+    return current instanceof MobileVault ? current.fs.rootUri : null
+  } catch {
+    return null
+  }
 }
 
 /** The open vault as background sync sees it: ready when it is an on-device
@@ -1237,7 +1250,7 @@ export const mobileBridge: ZenBridge = {
   // 'desktop-only' token makes app-core show its friendly toast.
   openExternalFile: async () => ({ ok: false, error: 'desktop-only' }),
   openExternalUrl: async () => ({ ok: false, error: 'desktop-only' }),
-  openAssetExternally: async () => notImplemented('openAssetExternally'),
+  openAssetExternally: (relPath) => openAssetExternally(activeVault(), relPath),
   // Bookmark cards fetch open-graph metadata natively (link-metadata.ts) —
   // a WKWebView fetch of an arbitrary page would be CORS-blocked.
   fetchLinkMetadata: (url) => fetchLinkMetadataOnDevice(url),

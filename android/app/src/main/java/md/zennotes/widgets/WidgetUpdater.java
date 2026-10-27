@@ -37,6 +37,8 @@ public final class WidgetUpdater {
             manager.updateAppWidget(id, TasksWidgetProvider.build(app, snapshot, id));
         }
         if (tasks.length > 0) manager.notifyAppWidgetViewDataChanged(tasks, R.id.zn_widget_list);
+
+        CalendarWidgetProvider.refreshAll(app);
     }
 
     private static int[] ids(Context context, AppWidgetManager manager,

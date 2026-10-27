@@ -71,6 +71,27 @@
                 android:name="android.appwidget.provider"
                 android:resource="@xml/widget_tasks_info" />
         </receiver>
+        <!-- Calendar: the month grid and the week's tasks to tick. Its taps go
+             to the receiver below, not exported, since a tick writes into a
+             note. -->
+        <receiver
+            android:name=".widgets.CalendarWidgetProvider"
+            android:exported="true"
+            android:label="@string/widget_calendar_label">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/widget_calendar_info" />
+        </receiver>
+        <receiver
+            android:name=".widgets.CalendarWidgetActionReceiver"
+            android:exported="false" />
+        <service
+            android:name=".widgets.CalendarAgendaService"
+            android:exported="false"
+            android:permission="android.permission.BIND_REMOTEVIEWS" />
         <service
             android:name=".widgets.RecentNotesWidgetService"
             android:exported="false"

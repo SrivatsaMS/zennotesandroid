@@ -11,6 +11,7 @@ import ReactDOM from 'react-dom/client'
 import { App as CapApp } from '@capacitor/app'
 import { Haptics, ImpactStyle } from '@capacitor/haptics'
 import { Keyboard } from '@capacitor/keyboard'
+import { Capacitor } from '@capacitor/core'
 import { getShellSnapshot, useShellSnapshot, subscribeShell, getAdjacentNotePath,
   getTagPresenceSnapshot, subscribeTagPresence } from '@zennotes/app-core/shell'
 import { getBrowseSnapshot, requestCreateBrowseFolder, requestRenameBrowseDatabase,
@@ -20,6 +21,7 @@ import { getWorkspaceSnapshot, useWorkspaceSnapshot, subscribeWorkspace, readPer
 import { getSettingsSnapshot, useSettingsSnapshot, subscribeSettings, setSettingsVisible, setEditorFontSize,
   showSettingsPage } from '@zennotes/app-core/settings'
 import { DateCalendar } from '@zennotes/app-core/calendar'
+import { CLOSE_CALENDAR_SHEET_EVENT, SHOW_CALENDAR_EVENT, requestCalendar, type CalendarRequest } from './calendar-request'
 import { useEditorPresentation, setEditorMode, hasEditorSelection, runEditorCommand } from '@zennotes/app-core/editor'
 import { getTasksSnapshot, moveTaskToColumn, type KanbanGroupBy } from '@zennotes/app-core/tasks'
 import { runAppCommand, showCommandPalette, showSearch, showTemplates, showOutline } from '@zennotes/app-core/commands'
@@ -435,8 +437,6 @@ function CreateSheet({ onClose }: { onClose: () => void }): React.JSX.Element {
   )
 }
 
-const SHOW_CALENDAR_EVENT = 'zn:show-calendar'
-
 /**
  * Open the Calendar. A phone has no room beside a note, and Home has no note
  * to sit beside, so there it is a sheet of its own (CalendarSheet). A tablet
@@ -444,7 +444,7 @@ const SHOW_CALENDAR_EVENT = 'zn:show-calendar'
  * its ••• row offers it.
  */
 function showCalendar(): void {
-  if (isPhoneWidth()) window.dispatchEvent(new Event(SHOW_CALENDAR_EVENT))
+  if (isPhoneWidth()) requestCalendar()
   else window.dispatchEvent(new Event('zen:toggle-calendar'))
 }
 
@@ -462,17 +462,43 @@ function showCalendar(): void {
  * With daily and weekly notes both off there is nothing for it to open, so
  * the row says how to turn daily notes on instead of disappearing.
  */
-function CalendarSheet({ onClose }: { onClose: () => void }): React.JSX.Element {
+function CalendarSheet({
+  onClose,
+  date,
+  focusAdd
+}: {
+  onClose: () => void
+  /** The widget's day; null opens on the calendar's own choice. */
+  date: string | null
+  focusAdd: boolean
+}): React.JSX.Element {
   const { calendarAvailable } = useSettingsSnapshot()
+  // Android raises no keyboard for a focus nobody tapped, and the widget's
+  // "Add a task" asked for one. Core focuses the field on mount, but a link
+  // that just brought the app back can land that focus before the WebView
+  // has its window, so it is placed again right before the keyboard.
+  useEffect(() => {
+    if (!focusAdd || !calendarAvailable || Capacitor.getPlatform() !== 'android') return
+    const timer = window.setTimeout(() => {
+      document.querySelector<HTMLInputElement>('.zn-calendar-sheet [data-calendar-panel] form input')?.focus()
+      void Keyboard.show().catch(() => {})
+    }, 300)
+    return () => window.clearTimeout(timer)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
   useEffect(() => {
     window.addEventListener('zen:close-right-panel', onClose)
-    return () => window.removeEventListener('zen:close-right-panel', onClose)
+    window.addEventListener(CLOSE_CALENDAR_SHEET_EVENT, onClose)
+    return () => {
+      window.removeEventListener('zen:close-right-panel', onClose)
+      window.removeEventListener(CLOSE_CALENDAR_SHEET_EVENT, onClose)
+    }
   }, [onClose])
 
   if (calendarAvailable) {
     return (
       <div className="zn-calendar-sheet">
-        <DateCalendar onOpen={onClose} />
+        <DateCalendar onOpen={onClose} date={date ?? undefined} focusAdd={focusAdd} />
       </div>
     )
   }
@@ -518,6 +544,9 @@ function MobileNav(): React.JSX.Element | null {
   const [createOpen, setCreateOpen] = useState(false)
   const [fabOpen, setFabOpen] = useState(false)
   const [calendarOpen, setCalendarOpen] = useState(false)
+  // Which day the sheet opens on; the key remounts it when a widget link
+  // asks for another day while it is already up.
+  const [calendarAt, setCalendarAt] = useState({ date: null as string | null, add: false, key: 0 })
   const closeCalendar = useCallback(() => setCalendarOpen(false), [])
   // First-run coach mark: the unlabeled ensō reads as a loading spinner to
   // new users (real-user tested). Set by onboarding, cleared on first tap.
@@ -547,7 +576,17 @@ function MobileNav(): React.JSX.Element | null {
   // the Calendar, which the ••• sheet opens too.
   useEffect(() => {
     const onCreate = (): void => setCreateOpen(true)
-    const onCalendar = (): void => setCalendarOpen(true)
+    const onCalendar = (e: Event): void => {
+      const request = (e as CustomEvent<CalendarRequest | undefined>).detail
+      // A tablet keeps the panel beside the open note and has no sheet;
+      // the widget's day does not reach it there.
+      if (request && !isPhoneWidth()) {
+        if (!document.querySelector('[data-calendar-panel]')) window.dispatchEvent(new Event('zen:toggle-calendar'))
+        return
+      }
+      setCalendarAt((prev) => ({ date: request?.date ?? null, add: request?.add ?? false, key: prev.key + 1 }))
+      setCalendarOpen(true)
+    }
     window.addEventListener('zn:quick-create', onCreate)
     window.addEventListener(SHOW_CALENDAR_EVENT, onCalendar)
     return () => {
@@ -674,7 +713,14 @@ function MobileNav(): React.JSX.Element | null {
       </button>
       {sheetOpen && <ActionSheet onClose={() => setSheetOpen(false)} />}
       {createOpen && <CreateSheet onClose={() => setCreateOpen(false)} />}
-      {calendarOpen && <CalendarSheet onClose={closeCalendar} />}
+      {calendarOpen && (
+        <CalendarSheet
+          key={calendarAt.key}
+          date={calendarAt.date}
+          focusAdd={calendarAt.add}
+          onClose={closeCalendar}
+        />
+      )}
     </>
   )
 }
@@ -1565,6 +1611,28 @@ function useCalendarWeekMode(): void {
 const RIGHT_PANEL_SELECTOR =
   '[data-calendar-panel], [data-connections-panel], [data-comments-panel], .zn-app-shell section[class*="border-l"][class*="shrink-0"], .zn-app-shell aside[class*="border-l"][class*="shrink-0"], .zn-app-shell div[class*="border-l"][class*="shrink-0"][class*="flex-col"]'
 
+/** The reference pane (a pinned note or PDF). It drew as a full-screen sheet
+ *  like the other right panels, but it lives outside EditorPane and never
+ *  hears `zen:close-right-panel`: Done and Back did nothing over it, and its
+ *  header's back chevron left the note for Home, where reopening the note
+ *  brought the sheet straight back (Dave, Discord, 2026-10-27). */
+const REFERENCE_PANE_SELECTOR = '[data-pane-id="pinned-ref"]'
+
+/**
+ * Close the top-most right panel, the way its own close control would. The
+ * reference pane renders after the editor panes, so it is the one on top; it
+ * hides through core's Hide Reference Pane (the pane's own square button),
+ * which keeps the pin, so the note's card brings it back with one tap.
+ */
+function closeRightPanel(): void {
+  const reference = document.querySelector<HTMLElement>(REFERENCE_PANE_SELECTOR)
+  if (reference && reference.style.display !== 'none') {
+    runCommand('ref.toggle')
+    return
+  }
+  window.dispatchEvent(new Event('zen:close-right-panel'))
+}
+
 function useRightPanelCloseButton(): void {
   useEffect(() => {
     if (!isPhoneWidth()) return
@@ -1581,9 +1649,7 @@ function useRightPanelCloseButton(): void {
         button.type = 'button'
         button.className = 'zn-panel-close'
         button.textContent = 'Done'
-        button.addEventListener('click', () => {
-          window.dispatchEvent(new Event('zen:close-right-panel'))
-        })
+        button.addEventListener('click', closeRightPanel)
         document.body.appendChild(button)
       } else if (!open && button) {
         button.remove()
@@ -1861,13 +1927,15 @@ function useHeaderBackButton(): void {
         '.zn-app-shell header.glass-header'
       )) {
         if (header.querySelector('.zn-header-back')) continue
+        // The reference sheet's chevron goes back to the note under it.
+        const inReference = header.closest(REFERENCE_PANE_SELECTOR) !== null
         const btn = document.createElement('button')
         btn.type = 'button'
         btn.className = 'zn-header-back'
-        btn.setAttribute('aria-label', 'Go back')
+        btn.setAttribute('aria-label', inReference ? 'Back to the note' : 'Go back')
         btn.innerHTML =
           '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14.5 5l-7 7 7 7"/></svg>'
-        btn.addEventListener('click', goBack)
+        btn.addEventListener('click', inReference ? closeRightPanel : goBack)
         header.insertAdjacentElement('afterbegin', btn)
       }
     }
@@ -1935,9 +2003,10 @@ function useSystemBackClose(): void {
         escape()
         return
       }
-      // 6. Full-screen right panels (calendar/outline/connections/comments).
+      // 6. Full-screen right panels (calendar/outline/connections/comments,
+      //    and the reference pane above them).
       if (document.querySelector(RIGHT_PANEL_SELECTOR)) {
-        window.dispatchEvent(new Event('zen:close-right-panel'))
+        closeRightPanel()
         return
       }
       // 7. The drawer.

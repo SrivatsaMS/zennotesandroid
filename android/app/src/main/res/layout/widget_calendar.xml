@@ -1,0 +1,193 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Calendar (4x5 and up, resizable to the whole screen): the Calendar
+     sheet's month grid on top (CalendarWidgetProvider adds its rows), the
+     selected day's week below it with its tasks to tick (CalendarAgendaService). -->
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools"
+    tools:ignore="UseAppTint,ContentDescription"
+    android:id="@+id/zn_widget_root"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent">
+
+    <ImageView
+        android:id="@+id/zn_widget_bg"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:scaleType="fitXY"
+        android:src="@drawable/zn_widget_bg"
+        android:tint="@color/znWidgetBg"
+        android:importantForAccessibility="no" />
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:orientation="vertical"
+        android:paddingStart="10dp"
+        android:paddingTop="8dp"
+        android:paddingEnd="10dp"
+        android:paddingBottom="6dp">
+
+        <LinearLayout
+            android:id="@+id/zn_cal_header"
+            android:layout_width="match_parent"
+            android:layout_height="32dp"
+            android:gravity="center_vertical"
+            android:orientation="horizontal">
+
+            <ImageView
+                android:id="@+id/zn_cal_prev"
+                android:layout_width="32dp"
+                android:layout_height="32dp"
+                android:padding="7dp"
+                android:src="@drawable/ic_zn_chevron_left"
+                android:tint="@color/znWidgetMuted"
+                android:contentDescription="@string/widget_calendar_previous_month" />
+
+            <TextView
+                android:id="@+id/zn_cal_month"
+                android:layout_width="0dp"
+                android:layout_height="match_parent"
+                android:layout_weight="1"
+                android:fontFamily="sans-serif-medium"
+                android:gravity="center"
+                android:maxLines="1"
+                android:textColor="@color/znWidgetFg"
+                android:textSize="14sp" />
+
+            <ImageView
+                android:id="@+id/zn_cal_next"
+                android:layout_width="32dp"
+                android:layout_height="32dp"
+                android:padding="7dp"
+                android:src="@drawable/ic_zn_chevron_right"
+                android:tint="@color/znWidgetMuted"
+                android:contentDescription="@string/widget_calendar_next_month" />
+        </LinearLayout>
+
+        <LinearLayout
+            android:id="@+id/zn_cal_grid"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="2dp"
+            android:orientation="vertical" />
+
+        <ImageView
+            android:id="@+id/zn_cal_divider"
+            android:layout_width="match_parent"
+            android:layout_height="1dp"
+            android:layout_marginTop="6dp"
+            android:scaleType="fitXY"
+            android:src="@drawable/zn_line"
+            android:tint="@color/znWidgetBg2"
+            android:importantForAccessibility="no" />
+
+        <LinearLayout
+            android:id="@+id/zn_cal_week_bar"
+            android:layout_width="match_parent"
+            android:layout_height="28dp"
+            android:layout_marginTop="4dp"
+            android:gravity="center_vertical"
+            android:orientation="horizontal">
+
+            <TextView
+                android:id="@+id/zn_cal_week_label"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:ellipsize="end"
+                android:fontFamily="sans-serif-medium"
+                android:maxLines="1"
+                android:textColor="@color/znWidgetFg"
+                android:textSize="13sp" />
+
+            <TextView
+                android:id="@+id/zn_cal_day_link"
+                android:layout_width="wrap_content"
+                android:layout_height="match_parent"
+                android:gravity="center"
+                android:paddingStart="8dp"
+                android:paddingEnd="6dp"
+                android:textColor="@color/znWidgetMuted"
+                android:textSize="12sp" />
+
+            <TextView
+                android:id="@+id/zn_cal_week_link"
+                android:layout_width="wrap_content"
+                android:layout_height="match_parent"
+                android:gravity="center"
+                android:paddingStart="6dp"
+                android:paddingEnd="2dp"
+                android:textColor="@color/znWidgetMuted"
+                android:textSize="12sp"
+                android:visibility="gone" />
+        </LinearLayout>
+
+        <FrameLayout
+            android:id="@+id/zn_cal_add"
+            android:layout_width="match_parent"
+            android:layout_height="34dp"
+            android:layout_marginTop="2dp">
+
+            <ImageView
+                android:id="@+id/zn_cal_add_bg"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:scaleType="fitXY"
+                android:src="@drawable/zn_cal_cell"
+                android:tint="@color/znWidgetBg2"
+                android:importantForAccessibility="no" />
+
+            <TextView
+                android:id="@+id/zn_cal_add_text"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:ellipsize="end"
+                android:gravity="center_vertical"
+                android:maxLines="1"
+                android:paddingStart="10dp"
+                android:paddingEnd="10dp"
+                android:textColor="@color/znWidgetMuted"
+                android:textSize="13sp" />
+        </FrameLayout>
+
+        <FrameLayout
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_marginTop="4dp"
+            android:layout_weight="1">
+
+            <ListView
+                android:id="@+id/zn_cal_agenda"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:divider="@null"
+                android:dividerHeight="0dp"
+                android:scrollbars="none" />
+
+            <LinearLayout
+                android:id="@+id/zn_cal_empty"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:gravity="center_vertical"
+                android:orientation="vertical"
+                android:visibility="gone">
+
+                <TextView
+                    android:id="@+id/zn_cal_empty_title"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:fontFamily="sans-serif-medium"
+                    android:textColor="@color/znWidgetFg"
+                    android:textSize="14sp" />
+
+                <TextView
+                    android:id="@+id/zn_cal_empty_detail"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="2dp"
+                    android:textColor="@color/znWidgetMuted"
+                    android:textSize="12sp" />
+            </LinearLayout>
+        </FrameLayout>
+    </LinearLayout>
+</FrameLayout>

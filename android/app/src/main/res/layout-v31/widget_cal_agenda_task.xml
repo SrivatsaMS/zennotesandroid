@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- A task in the Calendar widget's week list: the box ticks it, the row
+     opens it. Android 12+: a real CheckBox (RemoteViews compound buttons). -->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools"
+    tools:ignore="UseAppTint"
+    android:id="@+id/zn_task_row"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:gravity="center_vertical"
+    android:minHeight="36dp"
+    android:orientation="horizontal">
+
+    <CheckBox
+        android:id="@+id/zn_task_check"
+        android:layout_width="34dp"
+        android:layout_height="34dp"
+        android:minWidth="0dp"
+        android:minHeight="0dp"
+        android:contentDescription="@string/widget_calendar_mark_done" />
+
+    <!-- The task's text opens it. Its own tap target: a list row holding a
+         focusable CheckBox never gets the row's own click. -->
+    <LinearLayout
+        android:id="@+id/zn_task_open"
+        android:layout_width="0dp"
+        android:layout_height="match_parent"
+        android:layout_marginStart="2dp"
+        android:layout_weight="1"
+        android:gravity="center_vertical"
+        android:orientation="horizontal">
+
+        <TextView
+            android:id="@+id/zn_task_title"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:ellipsize="end"
+            android:maxLines="1"
+            android:textColor="@color/znWidgetFg"
+            android:textSize="13sp" />
+
+        <TextView
+            android:id="@+id/zn_task_note"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="6dp"
+            android:layout_marginEnd="4dp"
+            android:ellipsize="end"
+            android:maxLines="1"
+            android:maxWidth="120dp"
+            android:textColor="@color/znWidgetMuted"
+            android:textSize="11sp" />
+    </LinearLayout>
+</LinearLayout>

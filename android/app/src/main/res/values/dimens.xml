@@ -2,4 +2,6 @@
 <resources>
     <!-- Widget corner radius; values-v31 hands it to the system's radius. -->
     <dimen name="zn_widget_radius">16dp</dimen>
+    <!-- Calendar widget grid cell (number + dots), the panel's rows. -->
+    <dimen name="zn_cal_cell_height">34dp</dimen>
 </resources>
