@@ -770,6 +770,7 @@ function usePhoneLayoutBoot(): void {
       configureWorkspacePresentation({ sidebarVisible: false, noteListVisible: false, automaticCalendar: false })
       if (!firstLanding) {
         goHome()
+        setDrawerOpen(true)
         return
       }
       firstLanding = false
@@ -779,7 +780,11 @@ function usePhoneLayoutBoot(): void {
       // witness read somehow still in flight — falls back to Home, the
       // pre-#2 behavior, rather than guessing a note. The Start screen
       // setting (start-screen.ts) overrides all of that with Home.
-      if (persistedHome !== false || getStartScreen() === 'home') goHome()
+      if (persistedHome !== false || getStartScreen() === 'home') {
+        goHome()
+        // Land on the Browse note list instead of Home's Recent list.
+        setDrawerOpen(true)
+      }
       // First run only: land IN the seeded welcome note (reading mode — no
       // keyboard) instead of on a Home screen with nothing to do. Home stays
       // one Back tap away. The pane mode is set through the store before the
