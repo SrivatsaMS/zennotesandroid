@@ -3135,6 +3135,8 @@ function MobileShellRoot(): React.JSX.Element {
   useYouTubeLiteEmbeds()
   useVaultSettingsRows()
   useLayoutSettingsRow()
+  useHomeInboxList()
+  useCloudSettingsRow()
   useCloudSettingsRow()
   useAboutGitHubLinks()
   useAtlasTouchGestures()
@@ -3151,6 +3153,87 @@ function MobileShellRoot(): React.JSX.Element {
       <KanbanMoveSheet />
     </>
   )
+}
+
+/**
+ * Home shows the notes of the Inbox instead of core's capped "Recent" list.
+ * Core renders Home, so this is an island: the Recent section is hidden by
+ * CSS (mobile.css) and this list is inserted just before it. Rows copy
+ * HomeView's markup so the swipe / long-press row gestures keep working.
+ */
+function HomeInboxList(): React.JSX.Element {
+  const shell = useShellSnapshot()
+  const notes = useMemo(
+    () =>
+      shell.notes
+        .filter((n) => n.folder === 'inbox')
+        .slice()
+        .sort((a, b) => b.updatedAt - a.updatedAt),
+    [shell.notes]
+  )
+  return (
+    <section className="mb-9" data-home-section="inbox">
+      <div className="flex items-center gap-2 px-3">
+        <span className="text-xs font-semibold uppercase tracking-wide text-ink-400">Inbox</span>
+      </div>
+      {notes.length > 0 ? (
+        <ul className="mt-1.5 space-y-0.5">
+          {notes.map((note) => (
+            <li key={note.path}>
+              <button
+                type="button"
+                data-home-item
+                data-home-note-path={note.path}
+                onClick={() => void openNote(note.path).catch(reportActionError)}
+                className="group flex w-full items-center gap-3 rounded-lg px-3 py-2 text-left transition-colors hover:bg-paper-200/60 focus:bg-paper-200/70 focus:outline-none"
+              >
+                <span className="min-w-0 flex-1 truncate text-sm text-ink-800">
+                  {note.title || 'Untitled'}
+                </span>
+              </button>
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <p className="mt-1.5 px-3 py-2 text-sm text-ink-400">No notes in the Inbox yet.</p>
+      )}
+    </section>
+  )
+}
+
+function useHomeInboxList(): void {
+  useEffect(() => {
+    let container: HTMLElement | null = null
+    let root: ReturnType<typeof ReactDOM.createRoot> | null = null
+    const sync = (): void => {
+      const recent = document.querySelector<HTMLElement>(
+        '[data-home-nav] section[data-home-section="recent"]'
+      )
+      const parent = recent?.parentElement
+      if (!recent || !parent) {
+        // Home isn't on screen: detach, keep the React root alive.
+        container?.remove()
+        return
+      }
+      // Already placed right before the Recent section.
+      if (container?.parentElement === parent && container.nextElementSibling === recent) return
+      if (!container) {
+        container = document.createElement('div')
+        container.dataset.znHomeInbox = ''
+        root = ReactDOM.createRoot(container)
+        root.render(<HomeInboxList />)
+      }
+      parent.insertBefore(container, recent)
+    }
+    const observer = new MutationObserver(() => sync())
+    observer.observe(document.body, { childList: true, subtree: true })
+    sync()
+    return () => {
+      observer.disconnect()
+      root?.unmount()
+      container?.remove()
+    }
+  }, [])
 }
 
 export function mountMobileShell(): void {
