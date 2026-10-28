@@ -1848,6 +1848,12 @@
   display: none;
 }
 
+/* Home lists the Inbox's notes (useHomeInboxList in MobileShell.tsx) instead
+   of core's capped Recent list. */
+.zn-mobile.zn-phone [data-home-nav] section[data-home-section='recent'] {
+  display: none;
+}
+
 /* Desktop's tall top padding wastes a third of the phone viewport. */
 .zn-mobile.zn-phone [data-home-nav] > div {
   padding-top: 2.5rem;
