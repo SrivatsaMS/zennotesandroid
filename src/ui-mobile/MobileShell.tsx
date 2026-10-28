@@ -26,6 +26,9 @@ import { useEditorPresentation, setEditorMode, hasEditorSelection, runEditorComm
 import { getTasksSnapshot, moveTaskToColumn, type KanbanGroupBy } from '@zennotes/app-core/tasks'
 import { runAppCommand, showCommandPalette, showSearch, showTemplates, showOutline } from '@zennotes/app-core/commands'
 import { openNote, openWikilink, openTodayDailyNote } from '@zennotes/app-core/navigation'
+import { useBrowseSnapshot, getBrowseDirectory } from '@zennotes/app-core/browse'
+import { dirOf } from './note-order'
+import { hiddenDrawerFolders } from './drawer-folders'
 import { requestTrashNote } from '@zennotes/app-core/notes'
 import { MobileEditorToolbar } from './EditorToolbar'
 import { captureMobileWorkspace, reportActionError } from './workspace-context'
@@ -3154,48 +3157,69 @@ function MobileShellRoot(): React.JSX.Element {
     </>
   )
 }
+// My additions
 
-/**
- * Home shows the notes of the Inbox instead of core's capped "Recent" list.
- * Core renders Home, so this is an island: the Recent section is hidden by
- * CSS (mobile.css) and this list is inserted just before it. Rows copy
- * HomeView's markup so the swipe / long-press row gestures keep working.
- */
 function HomeInboxList(): React.JSX.Element {
-  const shell = useShellSnapshot()
-  const notes = useMemo(
-    () =>
-      shell.notes
-        .filter((n) => n.folder === 'inbox')
-        .slice()
-        .sort((a, b) => b.updatedAt - a.updatedAt),
-    [shell.notes]
-  )
+  const browse = useBrowseSnapshot()
+  const [path, setPath] = useState('')
+  const hidden = useMemo(() => hiddenDrawerFolders(browse), [browse])
+  const rows = useMemo(() => {
+    const dir = getBrowseDirectory(browse, path)
+    const hiding = !hidden.has(path)
+    return {
+      folders: dir.folders.filter((f) => !hiding || !hidden.has(f.directory)),
+      notes: [...dir.notes]
+    }
+  }, [browse, path, hidden])
+  const rowClass =
+    'group flex w-full items-center gap-3 rounded-lg px-3 py-2 text-left transition-colors hover:bg-paper-200/60 focus:bg-paper-200/70 focus:outline-none'
+  const parent = dirOf(path)
   return (
     <section className="mb-9" data-home-section="inbox">
       <div className="flex items-center gap-2 px-3">
-        <span className="text-xs font-semibold uppercase tracking-wide text-ink-400">Inbox</span>
+        <span className="text-xs font-semibold uppercase tracking-wide text-ink-400">
+          {path === '' ? 'Notes' : (path.split('/').pop() ?? path)}
+        </span>
       </div>
-      {notes.length > 0 ? (
-        <ul className="mt-1.5 space-y-0.5">
-          {notes.map((note) => (
-            <li key={note.path}>
-              <button
-                type="button"
-                data-home-item
-                data-home-note-path={note.path}
-                onClick={() => void openNote(note.path).catch(reportActionError)}
-                className="group flex w-full items-center gap-3 rounded-lg px-3 py-2 text-left transition-colors hover:bg-paper-200/60 focus:bg-paper-200/70 focus:outline-none"
-              >
-                <span className="min-w-0 flex-1 truncate text-sm text-ink-800">
-                  {note.title || 'Untitled'}
-                </span>
-              </button>
-            </li>
-          ))}
-        </ul>
-      ) : (
-        <p className="mt-1.5 px-3 py-2 text-sm text-ink-400">No notes in the Inbox yet.</p>
+      <ul className="mt-1.5 space-y-0.5">
+        {path !== '' && (
+          <li>
+            <button type="button" onClick={() => setPath(parent)} className={rowClass}>
+              <span className="shrink-0 text-ink-400">‹</span>
+              <span className="min-w-0 flex-1 truncate text-sm text-ink-600">
+                {parent === '' ? 'All notes' : (parent.split('/').pop() ?? '')}
+              </span>
+            </button>
+          </li>
+        )}
+        {rows.folders.map((f) => (
+          <li key={'d:' + f.directory}>
+            <button type="button" onClick={() => setPath(f.directory)} className={rowClass}>
+              <span className="min-w-0 flex-1 truncate text-sm font-medium text-ink-800">
+                {f.title}
+              </span>
+              <span className="shrink-0 text-ink-400">›</span>
+            </button>
+          </li>
+        ))}
+        {rows.notes.map((note) => (
+          <li key={note.path}>
+            <button
+              type="button"
+              data-home-item
+              data-home-note-path={note.path}
+              onClick={() => void openNote(note.path).catch(reportActionError)}
+              className={rowClass}
+            >
+              <span className="min-w-0 flex-1 truncate text-sm text-ink-800">
+                {note.title || 'Untitled'}
+              </span>
+            </button>
+          </li>
+        ))}
+      </ul>
+      {rows.folders.length === 0 && rows.notes.length === 0 && (
+        <p className="mt-1.5 px-3 py-2 text-sm text-ink-400">This folder is empty.</p>
       )}
     </section>
   )
